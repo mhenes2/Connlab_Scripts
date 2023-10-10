@@ -2,8 +2,17 @@ import mdtraj as md
 import argparse
 from datetime import datetime
 import os
+from schrodinger.application.desmond.packages import traj, topo, analysis
+from schrodinger.application.desmond import cms
 
 startTime = datetime.now()
+
+
+# a function to write out a new CMS file without waters
+def new_cms(cms_file, asl, name):
+    msys_model, cms_model = topo.read_cms(cms_file)
+    nowater = topo.extract_subsystem(cms_model, asl)
+    cms.Cms.write(nowater[0], '{}_nowater-out.cms'.format(name))
 
 
 def get_parser():
@@ -35,11 +44,18 @@ def get_parser():
                         help='output format. options are "dtr", "dcd", or "both" ',
                         type=str,
                         default="both")
+    parser.add_argument('-cms_file',
+                        help='cms file to be outputted without water',
+                        type=str,
+                        required=True)
     return parser
 
 
 def main(args):
     topology = md.load(args.top_file).topology
+
+    new_cms(args.cms_file, args.extract_asl, args.outname)
+    print ("Done writing no water CMS file")
 
     if args.c != True:
         if args.f == "dtr":
