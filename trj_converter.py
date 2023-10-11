@@ -7,9 +7,14 @@ from schrodinger.application.desmond import cms
 
 startTime = datetime.now()
 
-
-# a function to write out a new CMS file without waters
 def new_cms(cms_file, asl, name):
+    """
+    This function will write out a new CMS file without waters
+    :param str cms_file: file path for the input cms file
+    :param str asl: atom language selection for the substructure you'd like to extract
+    :param str name: output name. "_nowater-out.cms" will be added to the end of that name
+    """
+
     msys_model, cms_model = topo.read_cms(cms_file)
     nowater = topo.extract_subsystem(cms_model, asl)
     cms.Cms.write(nowater[0], '{}_nowater-out.cms'.format(name))
@@ -21,18 +26,18 @@ def get_parser():
     parser = argparse.ArgumentParser(description=script_desc)
 
     parser.add_argument('infiles',
-                        help='desmond trajectory directories to be used in RMSD and protein/ligand RMSF calculations',
+                        help='desmond trajectory directories that will be converted',
                         nargs='+')
     parser.add_argument('-top_file',
                         help='Topology file in PDB form',
                         type=str,
                         required=True)
     parser.add_argument('-outname',
-                        help='name of the job',
+                        help='name of the job. this name will be used to name the output files',
                         type=str,
                         required=True)
     parser.add_argument('-c',
-                        help='concat trjs',
+                        help='concat trjs. Use this flag after you have outputted stripped trjs',
                         type=bool,
                         default=False)
     parser.add_argument('-extract_asl',
@@ -52,8 +57,10 @@ def get_parser():
 
 
 def main(args):
+    # load the topology from the provided PDB file
     topology = md.load(args.top_file).topology
 
+    # call the new_cms function to write out a new *-out.cms file with a subsystem
     new_cms(args.cms_file, args.extract_asl, args.outname)
     print ("Done writing no water CMS file")
 
@@ -97,10 +104,11 @@ def main(args):
                 # rename the output file to have _trj to match Desmond output
                 os.rename("{}_rep{}.dtr".format(args.outname, index + 1), '{}_rep{}_trj'.format(args.outname, index + 1))
 
-    #TODO should be able to do this in addition to individual trjs
-    else:
+
+    # if the user wants a concat trjs
+    if args.c == True:
         trj_list = []
-        for i in args.infiles:
+        for i in range(len(args.infiles)):
             trj_list.append(md.load(i))
 
         concat_trj = md.join(trj_list)
