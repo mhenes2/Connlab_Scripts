@@ -110,7 +110,8 @@ def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     # (results[0][0]) = this is the residue info
     # (results[0][1]) = this is RMSF
     # (results[1]) = this is RMSD
-    results = (analysis.analyze(trj_out, rmsf_analysis, rmsd_analysis))
+    results = (analysis.analyze(trj_out, rmsf_analysis, rmsd_analysis, progress_feedback=analysis.progress_report_frame_number(1000)))
+
     results_SF = (analysis.analyze(trj_out,per_resi_per_frame_SF))
 
     return results, results_SF
