@@ -17,25 +17,45 @@ from scipy.stats import sem
 startTime = datetime.now()
 
 
-# This function reads the cms file and returns the msys_model and cms_model
 def read_cms_file(cms_file):
+    """
+    This function will read the input cms_file
+    :param str cms_file: file path for the input cms file
+    :returns msys_model and cms_model
+    """
+
     # Load the cms_model
     msys_model, cms_model = topo.read_cms(cms_file)
     # return the msys_model and cms_model
     return msys_model, cms_model
 
 
-# This function reads the trajectory and returns the trj_out (a frame list)
 def read_trajectory(trj_in):
+    """
+    This function will write out a new CMS file without waters
+    :param str trj_in: file path for the input trj file
+    :returns frame list
+    """
+
     # Load the trajectory
     trj_out = traj.read_traj(trj_in)
     # return the trajectory object
     return trj_out
 
 
-# Calculates the c-alpha RMSD and RMSF
-# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
 def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    """
+    Calculates the c-alpha RMSD and RMSF
+    :param str optional_protein_asl:
+    :param cms_model
+    :param msys_model
+    :param trj_out
+    :param st
+    :returns results[0][0]) = this is the residue info
+    :returns (results[0][1]) = this is RMSF
+    :returns (results[1]) = this is RMSD
+    """
+
     # This is the ASL to use to calculate the RMSD and RMSF
     # We default to c alpha atoms but the user can select another set of atoms
     if optional_protein_asl:
@@ -110,9 +130,10 @@ def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     # (results[0][0]) = this is the residue info
     # (results[0][1]) = this is RMSF
     # (results[1]) = this is RMSD
-    results = (analysis.analyze(trj_out, rmsf_analysis, rmsd_analysis, progress_feedback=analysis.progress_report_frame_number(1000)))
-
-    results_SF = (analysis.analyze(trj_out,per_resi_per_frame_SF))
+    results = (analysis.analyze(trj_out, rmsf_analysis, rmsd_analysis,
+                                progress_feedback=analysis.progress_report_frame_number))
+    results_SF = (analysis.analyze(trj_out,per_resi_per_frame_SF,
+                                   progress_feedback=analysis.progress_report_frame_number))
 
     return results, results_SF
 
@@ -393,7 +414,8 @@ def calc_lig_rmsf(optional_ligand_asl, cms_model, msys_model, trj_out, st):
 
     lig_RMSF_analysis = analysis.RMSF(msys_model, cms_model, aids, fit_aids, fit_ref_pos)
 
-    results = analysis.analyze(trj_out, lig_RMSF_analysis)
+    results = analysis.analyze(trj_out, lig_RMSF_analysis,
+                               progress_feedback=analysis.progress_report_frame_number(1000))
 
     # lig_aids = results[0]
     # lig_rmsf = results[1]
@@ -591,7 +613,7 @@ def main(args):
 
     # initialize the output arrays
     RMSD_output = np.zeros((len(tr), len(args.infiles)), dtype=np.float16)
-    protein_RMSF_output = np.zeros((len(cms_model.select_atom('a. CA')), len(args.infiles)), dtype=np.float16)
+    protein_RMSF_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)), dtype=np.float16)
 
     # delete to manage memory
     del tr
@@ -613,6 +635,7 @@ def main(args):
     # iterate over the input trajectories
     for index, trajectory in enumerate(args.infiles):
         tr = read_trajectory(trajectory)
+        print (len(tr))
 
         # if the user wants to take strides, this will do that for them
         if args.s:
@@ -624,7 +647,6 @@ def main(args):
 
         if args.protein_asl:
             all_results, proteinSF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
-            print (type(all_results))
         else:
             all_results, proteinSF = calc_rmsd_rmsf('', cms_model, msys_model, tr, st)
         print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
