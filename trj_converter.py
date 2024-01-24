@@ -3,9 +3,11 @@ import argparse
 from datetime import datetime
 import os
 from schrodinger.application.desmond.packages import traj, topo, analysis
+from schrodinger import structure
 from schrodinger.application.desmond import cms
 
 startTime = datetime.now()
+
 
 def new_cms(cms_file, asl, name):
     """
@@ -19,6 +21,9 @@ def new_cms(cms_file, asl, name):
     nowater = topo.extract_subsystem(cms_model, asl)
     cms.Cms.write(nowater[0], '{}_nowater-out.cms'.format(name))
 
+    # write out pdb
+    nowater[0].write("{}_nowater.pdb".format(name))
+
 
 def get_parser():
     script_desc = ""
@@ -31,7 +36,7 @@ def get_parser():
     parser.add_argument('-top_file',
                         help='Topology file in PDB form',
                         type=str,
-                        required=True)
+                        required=False)
     parser.add_argument('-outname',
                         help='name of the job. this name will be used to name the output files',
                         type=str,
@@ -57,12 +62,28 @@ def get_parser():
 
 
 def main(args):
-    # load the topology from the provided PDB file
-    topology = md.load(args.top_file).topology
+    # make pdb topology model
+    msys_model, cms_model = topo.read_cms(args.cms_file)
+    # st = structure.Structure.read(args.cms_file)
+    st = topo.extract_subsystem(cms_model, 'protein')
+
+    # st.write("{}.pdb".format(args.outname))
+    structure.PDBWriter(filename='{}.pdb'.format(args.outname)).write(st[0])
+    print("Done writing full system PDB file")
 
     # call the new_cms function to write out a new *-out.cms file with a subsystem
     new_cms(args.cms_file, args.extract_asl, args.outname)
     print ("Done writing no water CMS file")
+
+    if args.top_file:
+        topo_input = args.top_file
+
+    else:
+        topo_input = "{}.pdb".format(args.outname)
+
+    # load the topology from the provided PDB file
+    # topology = md.load(args.top_file).topology
+    topology = md.load(topo_input).topology
 
     if args.c != True:
         if args.f == "dtr":
@@ -72,11 +93,11 @@ def main(args):
 
                 print ('writing trj in dtr format')
 
-                traj.save_dtr("{}_rep{}.dtr".format(args.outname, index + 1))
+                traj.save_dtr("{}_rep{}_trj".format(args.outname, index + 1))
                 print('Done saving dtr trajectory')
 
                 # rename the output file to have _trj to match Desmond output
-                os.rename("{}_rep{}.dtr".format(args.outname, index + 1), '{}_rep{}_trj'.format(args.outname, index + 1))
+                # os.rename("{}_rep{}.dtr".format(args.outname, index + 1), '{}_rep{}_trj'.format(args.outname, index + 1))
 
         elif args.f == "dcd":
             for index, trajectory in enumerate(args.infiles):
@@ -98,11 +119,11 @@ def main(args):
                 traj.save_dcd("{}_rep{}.dcd".format(args.outname, index + 1))
                 print('Done saving dcd trajectory')
 
-                traj.save_dtr("{}_rep{}.dtr".format(args.outname, index + 1))
+                traj.save_dtr("{}_rep{}_trj".format(args.outname, index + 1))
                 print('Done saving dtr trajectory')
 
                 # rename the output file to have _trj to match Desmond output
-                os.rename("{}_rep{}.dtr".format(args.outname, index + 1), '{}_rep{}_trj'.format(args.outname, index + 1))
+                # os.rename("{}_rep{}.dtr".format(args.outname, index + 1), '{}_rep{}_trj'.format(args.outname, index + 1))
 
 
     # if the user wants a concat trjs
