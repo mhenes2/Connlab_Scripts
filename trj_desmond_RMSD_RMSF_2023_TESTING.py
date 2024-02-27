@@ -107,6 +107,100 @@ def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     return residues, RMSF, RMSD, results_SF
 
 
+# Calculates the c-alpha RMSD and RMSF
+# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
+def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    # This is the ASL to use to calculate the RMSD and RMSF
+    # We default to c alpha atoms but the user can select another set of atoms
+    if optional_protein_asl:
+        ASL_calc = optional_protein_asl
+    # if the user didn't provide a protein ASL, then default to the c-alpha
+    else:
+        ASL_calc = 'protein and a. CA'
+
+    # if the system has a ligand, this function should get the ligand automatically
+    # ligand[0] = cms structure of the ligand
+    # ligand[1] = ligand ASL
+    ligand = auto.getLigand(st)
+
+    # Get atom ids (aids) for the RMSD and RMSF calculation eg. if you want the RSMD for c-alpha carbons (CA), then
+    # use 'a. CA' for the ASL_calc variable above
+    # Documentation: http://content.schrodinger.com/Docs/r2018-2/python_api/product_specific.html
+    aids = cms_model.select_atom(ASL_calc)
+
+    # Get the aids for the reference to be used in the RMSD calculation -
+    # we don't need a ref aids just the position of the reference
+    ref_gids = topo.asl2gids(cms_model, ASL_calc, include_pseudoatoms=True)
+
+    # get the position for the reference gids from frame 1 - this is what we need
+    ref_pos = trj_out[0].pos(ref_gids)
+
+    # get the fit aids position - we're going to find on the protein backbone
+    fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
+
+    # get the fit_aids gids
+    fit_gids = topo.aids2gids(cms_model, fit_aids, include_pseudoatoms=True)
+
+    # get the position of frame 1
+    fit_ref_pos = trj_out[0].pos(fit_gids)
+
+    # calculate RMSD
+    # aids =
+    # ref_pos =
+    # fit_aids =
+    # fit_ref_pos =
+    rmsd_analysis = analysis.RMSD(msys_model=msys_model, cms_model=cms_model, aids=aids, ref_pos=ref_pos,
+                                  fit_aids=fit_aids, fit_ref_pos=fit_ref_pos)
+
+    RMSD_results = (analysis.analyze(trj_out, rmsd_analysis))
+
+    return RMSD_results
+
+
+# Calculates the c-alpha RMSD and RMSF
+# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
+def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    # This is the ASL to use to calculate the RMSD and RMSF
+    # We default to c alpha atoms but the user can select another set of atoms
+    if optional_protein_asl:
+        ASL_calc = optional_protein_asl
+    # if the user didn't provide a protein ASL, then default to the c-alpha
+    else:
+        ASL_calc = 'protein and a. CA'
+
+    # if the system has a ligand, this function should get the ligand automatically
+    # ligand[0] = cms structure of the ligand
+    # ligand[1] = ligand ASL
+    ligand = auto.getLigand(st)
+
+    # aids_rmsf = evaluate_asl(st, rmsf_aids_selection)
+    # TODO give the user the option to calculate the RMSF for something else other than c alpha atoms?
+    aids_rmsf = cms_model.select_atom(ASL_calc)
+
+    rmsf_fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
+
+    rmsf_fit_gids = topo.aids2gids(cms_model, rmsf_fit_aids, include_pseudoatoms=True)
+    rmsf_fit_ref_pos = trj_out[0].pos(rmsf_fit_gids)
+
+    # calculate RMSF
+    # aids =
+    # fit_aids =
+    # fit_ref_pos =
+    rmsf_analysis = analysis.ProteinRMSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
+                                         fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
+
+    per_resi_per_frame_SF = analysis.ProteinSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
+                                               fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
+
+    results = (analysis.analyze(trj_out, rmsf_analysis))
+    residues = results[0][0]
+    RMSF = results[0][1]
+
+    results_SF = (analysis.analyze(trj_out, per_resi_per_frame_SF))
+
+    return residues, RMSF, results_SF
+
+
 # Calculate the Ligand RMSF
 def calc_lig_rmsf(optional_ligand_asl, cms_model, msys_model, trj_out):
     # This evaluates if the user inputs a ligand ASL. If yes, then use the user input
@@ -451,6 +545,70 @@ def write_csv(cms_model, RMSD_output, protein_RMSF_output, traj_len, RMSF_row_la
             writer.writerows(lig_RMSF_final_output)
 
 
+def write_RMSD_csv(RMSD_output, traj_len, fr):
+    RMSD_row_labels = list(range(0, traj_len, 1))
+
+    RMSD_output = np.reshape(RMSD_output, (traj_len, len(args.infiles)))
+
+    RMSD_column_labels = []
+    for i in range(len(args.infiles)):
+        RMSD_column_labels.append('{} rep{} CA RMSD'.format(args.outname, i+1))
+    RMSD_column_labels.insert(0, 'Frame #')
+    RMSD_column_labels.insert(1, 'Time [ns]')
+    RMSD_column_labels.append('{} Average CA RMSD'.format(args.outname))
+
+    # write out the final protein RMSD results
+    RMSD_average = np.average(RMSD_output, axis=1)
+    sim_time = np.around(np.linspace(0, fr/1000, traj_len), 5)
+    RMSD_final_output = np.column_stack((RMSD_row_labels, sim_time, RMSD_output, RMSD_average))
+    RMSD_final_output = np.vstack((RMSD_column_labels, RMSD_final_output))
+    with open(args.outname + '_RMSD.csv', 'w') as f:
+        writer = csv.writer(f, delimiter=',', lineterminator='\n')
+        writer.writerows(RMSD_final_output)
+
+
+def write_RMSF_csv(cms_model, protein_RMSF_output, RMSF_row_labels, errors):
+
+    RMSF_row_labels_ASL_calc = 'protein and a. CA'
+    RMSF_row_labels_aids = cms_model.select_atom(RMSF_row_labels_ASL_calc)
+
+    protein_RMSF_output = np.reshape(protein_RMSF_output, (len(RMSF_row_labels_aids), len(args.infiles)))
+
+    RMSF_column_labels = []
+    for i in range(len(args.infiles)):
+        RMSF_column_labels.append('{} rep{} CA RMSF'.format(args.outname, i+1))
+    RMSF_column_labels.insert(0, 'Residue ID')
+    RMSF_column_labels.append('{} Average CA RMSF'.format(args.outname))
+    RMSF_column_labels.append ('{} SEM CA RMSF'.format (args.outname))
+
+    # write out the protein RMSF results
+    RMSF_average = np.average(protein_RMSF_output, axis=1)
+    RMSF_SEM = np.average(errors, axis=1)
+
+    RMSF_final_output = np.column_stack((RMSF_row_labels, protein_RMSF_output, RMSF_average, RMSF_SEM))
+    RMSF_final_output = np.vstack((RMSF_column_labels, RMSF_final_output))
+    with open(args.outname + '_RMSF.csv', 'w') as f:
+        writer = csv.writer(f, delimiter=',', lineterminator='\n')
+        writer.writerows(RMSF_final_output)
+
+
+def write_ligRMSF_csv(atom_ids, lig_RMSF_output):
+    if atom_ids != '':
+        lig_RMSF_column_labels = []
+        for i in range(len(args.infiles)):
+            lig_RMSF_column_labels.append('{} rep{} Ligand RMSF'.format(args.outname, i + 1))
+
+        lig_RMSF_column_labels.insert(0, 'Ligand Atoms')
+        lig_RMSF_column_labels.append('{} Average Ligand RMSF'.format(args.outname))
+
+        lig_RMSF_average = np.average(lig_RMSF_output, axis=1)
+
+        lig_RMSF_final_output = np.column_stack((atom_ids, lig_RMSF_output, lig_RMSF_average))
+        lig_RMSF_final_output = np.vstack((lig_RMSF_column_labels, lig_RMSF_final_output))
+        with open(args.outname + '_lig_RMSF.csv', 'w') as f:
+            writer = csv.writer(f, delimiter=',', lineterminator='\n')
+            writer.writerows(lig_RMSF_final_output)
+
 def get_parser():
     script_desc = "This script will calculate the protein RMSD/RMSF and ligand RMSF, if a ligand is in the structure, " \
                   "for any number of trajectories. The script allows for optional protein and ligand asl (see below)"
@@ -482,6 +640,12 @@ def get_parser():
                              "Start:End:Step",
                         type=str,
                         default="0:-1:1")
+    parser.add_argument('-RMSD',
+                        help="Do only the RMSD analysis")
+    parser.add_argument('-RMSF',
+                        help="Do only the RMSF analysis")
+    parser.add_argument('-lig_RMSF',
+                        help="Do only the ligand RMSF analysis")
     return parser
 
 
@@ -497,7 +661,17 @@ def main(args):
     # don't need to load anything else bc all input trjs should be the same length
     tr = read_trajectory(args.infiles[0])
 
-    # if use
+    # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
+    # end on the last frame, and take steps of 1
+    if args.s:
+        # get the first frame, last frame, and the step the user wants to take
+        start, end, step = args.s.split(":")
+        if end == -1:
+            last_index = len(tr)-1
+            tr = tr[start:last_index]
+        else:
+            tr = tr[start:end]
+        tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
 
     # initialize the output arrays
     # np.float16 is used to save memory
@@ -528,72 +702,107 @@ def main(args):
         # pass the trj to the read_trajectory function. returns a list of frames
         tr = read_trajectory(trajectory)
 
+        # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
+        # end on the last frame, and take steps of 1
+        if args.s:
+            # get the first frame, last frame, and the step the user wants to take
+            start, end, step = args.s.split(":")
+            if end == -1:
+                last_index = len(tr) - 1
+                tr = tr[start:last_index]
+            else:
+                tr = tr[start:end]
+            tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
+
         traj_len = len(tr)
 
         print("Done loading trajectory {}".format(index + 1))
 
-        # do the analysis
-        residues, RMSF, RMSD, results_SF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
+        if args.RMSD:
+            RMSD = calc_rmsd(args.protein_asl, cms_model, msys_model, tr, st)
 
-        print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
+            print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
 
-        # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
-        RMSD_output[:, index] = RMSD
-        # output protein RMSF data to the output array
-        protein_RMSF_output[:, index] = RMSF
+            # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
+            RMSD_output[:, index] = RMSD
 
-        # Do block averaging
-        blocking_all = []
-        for i in results_SF[1].T:
-            blocking = reblock(i)
-            blocking_all.append(blocking)
-
-        optimal_block_num = []
-        for j in blocking_all:
-            optimal = find_optimal_block(ndata=traj_len, stats=j)
-            optimal_block_num.append(optimal)
-
-        optimal_block_num = [item for sublist in optimal_block_num for item in sublist]
-
-        # most common block number
-        most_common_number = max(set(optimal_block_num), key=optimal_block_num.count)
-
-        per_rep_SEM = []
-
-        # for every residue, in proteinSF divide that list into the optimal number of blocks
-        for resi in results_SF[1].T:
-            divided_list = np.array_split(np.asarray(resi), most_common_number)
-
-            # sem list
-            sem_list = []
-            for i in divided_list:
-                sem_list.append(sem(i))
-
-            per_rep_SEM.append(sem(sem_list))
-
-        RMSF_SEM_output[:,index] = per_rep_SEM
-
-        ###################################
-        # calculate ligand RMSF if needed #
-        ###################################
-
-        # If the user, inputs a ligand ASL, use that
-        if args.ligand_asl != '':
-            # Ligand RMSF analysis with provided ligand asl
+        if args.RMSF:
+            residues, RMSF, results_SF = calc_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
+        if args.lig_RMSF:
             lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
-            lig_RMSF_output[:, index] = lig_rmsf_results
-            print("Rep{} Ligand RMSF Analysis Done".format(index + 1))
         else:
-            continue
+            # do the analysis
+            residues, RMSF, RMSD, results_SF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
 
-        del tr
-        # del residues, RMSF, RMSD, results_SF
+            print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
+
+            # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
+            RMSD_output[:, index] = RMSD
+            # output protein RMSF data to the output array
+            protein_RMSF_output[:, index] = RMSF
+
+            # Do block averaging
+            blocking_all = []
+            for i in results_SF[1].T:
+                blocking = reblock(i)
+                blocking_all.append(blocking)
+
+            optimal_block_num = []
+            for j in blocking_all:
+                optimal = find_optimal_block(ndata=traj_len, stats=j)
+                optimal_block_num.append(optimal)
+
+            optimal_block_num = [item for sublist in optimal_block_num for item in sublist]
+
+            # most common block number
+            most_common_number = max(set(optimal_block_num), key=optimal_block_num.count)
+
+            per_rep_SEM = []
+
+            # for every residue, in proteinSF divide that list into the optimal number of blocks
+            for resi in results_SF[1].T:
+                divided_list = np.array_split(np.asarray(resi), most_common_number)
+
+                # sem list
+                sem_list = []
+                for i in divided_list:
+                    sem_list.append(sem(i))
+
+                per_rep_SEM.append(sem(sem_list))
+
+            RMSF_SEM_output[:,index] = per_rep_SEM
+
+            ###################################
+            # calculate ligand RMSF if needed #
+            ###################################
+
+            # If the user, inputs a ligand ASL, use that
+            if args.ligand_asl != '':
+                # Ligand RMSF analysis with provided ligand asl
+                lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
+                lig_RMSF_output[:, index] = lig_rmsf_results
+                print("Rep{} Ligand RMSF Analysis Done".format(index + 1))
+            else:
+                continue
+
+            del tr
+            # del residues, RMSF, RMSD, results_SF
 
     ###########################
     # Output data to CSV file #
     ###########################
-    RMSD_output = np.around(RMSD_output, decimals=3)
-    write_csv(cms_model, RMSD_output, protein_RMSF_output, traj_len, residues, fr, RMSF_SEM_output, '', '')
+    if args.RMSD:
+        RMSD_output = np.around(RMSD_output, decimals=3)
+        write_RMSD_csv(RMSD_output,traj_len,fr)
+
+    if args.RMSF:
+        write_RMSF_csv(cms_model, protein_RMSF_output, residues, RMSF_SEM_output)
+
+    if args.lig_RMSF:
+        write_ligRMSF_csv(lig_rmsf_aids, lig_RMSF_output)
+    else:
+        RMSD_output = np.around(RMSD_output, decimals=3)
+        write_csv(cms_model, RMSD_output, protein_RMSF_output, traj_len, residues, fr, RMSF_SEM_output, '', '')
 
 
 if __name__ == '__main__':
