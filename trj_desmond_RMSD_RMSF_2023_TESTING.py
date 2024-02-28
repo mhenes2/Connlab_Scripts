@@ -641,11 +641,17 @@ def get_parser():
                         type=str,
                         default="0:-1:1")
     parser.add_argument('-RMSD',
-                        help="Do only the RMSD analysis")
+                        help="Do only the RMSD analysis",
+                        type=bool,
+                        default=False)
     parser.add_argument('-RMSF',
-                        help="Do only the RMSF analysis")
+                        help="Do only the RMSF analysis",
+                        type=bool,
+                        default=False)
     parser.add_argument('-lig_RMSF',
-                        help="Do only the ligand RMSF analysis")
+                        help="Do only the ligand RMSF analysis",
+                        type=bool,
+                        default=False)
     return parser
 
 
@@ -668,9 +674,9 @@ def main(args):
         start, end, step = args.s.split(":")
         if end == -1:
             last_index = len(tr)-1
-            tr = tr[start:last_index]
+            tr = tr[int(start):int(last_index)]
         else:
-            tr = tr[start:end]
+            tr = tr[int(start):int(end)]
         tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
 
     # initialize the output arrays
@@ -711,25 +717,29 @@ def main(args):
                 last_index = len(tr) - 1
                 tr = tr[start:last_index]
             else:
-                tr = tr[start:end]
+                tr = tr[int(start):int(end)]
             tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
 
         traj_len = len(tr)
+        print (traj_len)
 
         print("Done loading trajectory {}".format(index + 1))
 
         if args.RMSD:
             RMSD = calc_rmsd(args.protein_asl, cms_model, msys_model, tr, st)
 
-            print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
+            print("Rep{} Protein RMSD Analysis Done".format(index + 1))
 
             # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
             RMSD_output[:, index] = RMSD
 
-        if args.RMSF:
+        elif args.RMSF:
             residues, RMSF, results_SF = calc_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
-        if args.lig_RMSF:
+            print("Rep{} Protein RMSF Analysis Done".format(index + 1))
+        elif args.lig_RMSF:
             lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
+            print("Rep{} Ligand RMSF Analysis Done".format(index + 1))
+
         else:
             # do the analysis
             residues, RMSF, RMSD, results_SF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
@@ -795,10 +805,10 @@ def main(args):
         RMSD_output = np.around(RMSD_output, decimals=3)
         write_RMSD_csv(RMSD_output,traj_len,fr)
 
-    if args.RMSF:
+    elif args.RMSF:
         write_RMSF_csv(cms_model, protein_RMSF_output, residues, RMSF_SEM_output)
 
-    if args.lig_RMSF:
+    elif args.lig_RMSF:
         write_ligRMSF_csv(lig_rmsf_aids, lig_RMSF_output)
     else:
         RMSD_output = np.around(RMSD_output, decimals=3)
