@@ -17,25 +17,45 @@ from scipy.stats import sem
 startTime = datetime.now()
 
 
-# This function reads the cms file and returns the msys_model and cms_model
 def read_cms_file(cms_file):
+    """
+    This function reads the cms file and returns the msys_model and cms_model
+    :param str cms_file: the file path to the trajectory cms file
+    :return: the system model (mysy_model) and the cms_model used by many analysis function
+    """
+
     # Load the cms_model
     msys_model, cms_model = topo.read_cms(cms_file)
     # return the msys_model and cms_model
     return msys_model, cms_model
 
 
-# This function reads the trajectory and returns the trj_out (a frame list)
 def read_trajectory(trj_in):
+    """
+    This function reads the trajectory and returns the trj_out (a frame list)
+    :param str trj_in: the file path to the trajecory folder
+    :return: a list of frames to be used by the analysis functions
+    """
+
     # Load the trajectory
     trj_out = traj.read_traj(trj_in)
     # return the trajectory object
     return trj_out
 
 
-# Calculates the c-alpha RMSD and RMSF
-# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
 def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    """
+    # Calculates the c-alpha RMSD and RMSF
+    # Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
+
+    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD and RMF analysis on - default is c alpha atoms
+    :param cms_model: the cms_model obtained from the read_cms_file function
+    :param msys_model: the msys_model obtained from the read_cms_file function
+    :param trj_out: the list of frames obtained from the read_trajectory function
+    :param st: structure element obtained from main
+    :return: list of residues, RMSF , results_SF
+    """
+
     # This is the ASL to use to calculate the RMSD and RMSF
     # We default to c alpha atoms but the user can select another set of atoms
     if optional_protein_asl:
