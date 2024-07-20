@@ -11,11 +11,13 @@ import numpy as np
 import argparse
 import collections
 from scipy.stats import sem
+import logging
 
 
 # get the time the script starts running - This is used so we can know how long things take to run
 startTime = datetime.now()
-
+# creating the logger object
+logger = logging.getLogger()
 
 def read_cms_file(cms_file):
     """
@@ -695,7 +697,7 @@ def main(args):
     st = structure.Structure.read(args.cms_file)
 
     # Load the first trj so you can get the length of the trajectory
-    # don't need to load anything else bc all input trjs should be the same length
+    # don't need to load anything else because all input trjs should be the same length
     tr = read_trajectory(args.infiles[0])
 
     # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
@@ -710,28 +712,28 @@ def main(args):
             tr = tr[int(start):int(end)]
         tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
 
-    # initialize the output arrays
+    # initialize the output arrays based on what the user wants to calculate
     # np.float16 is used to save memory
-    RMSD_output = np.zeros((len(tr), len(args.infiles)), dtype=np.float16)
-    protein_RMSF_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)), dtype=np.float16)
-    RMSF_SEM_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)))
+    if args.RMSD:
+        RMSD_output = np.zeros((len(tr), len(args.infiles)), dtype=np.float16)
 
-    # get the last frame which will be used later in the output csv
+    if args.RMSF:
+        # TODO output the residue info?
+        protein_RMSF_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)), dtype=np.float16)
+        RMSF_SEM_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)))
+
+    # get the time (in ps) of the last frame which will be used later in the output csv
     fr = tr[-1].time
 
-    # delete to manage memory
+    # delete to manage memory - don't really need it anymore, will reload later
     del tr
 
-    if args.ligand_asl != '':
+    if args.lig_RMSF:
         lig_aids = cms_model.select_atom(args.ligand_asl)
-
         # initialize the output array for the ligand RMSF
         lig_RMSF_output = np.zeros((len(lig_aids), len(args.infiles)))
 
-    # TODO do I need this?
-    #initialize the RMSF SEM output arrays
-    # RMSF_SEM_output = []
-
+    # set the length of the trj to zero before we start to avoid issues later
     traj_len = 0
 
     # iterate over the input trajectories
@@ -751,31 +753,72 @@ def main(args):
                 tr = tr[int(start):int(end)]
             tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
 
-        traj_len = len(tr)
-        print (traj_len)
-
-        print("Done loading trajectory {}".format(index + 1))
+        logging.info("Done loading trajectory {}".format(index + 1))
 
         if args.RMSD:
+            logging.info("Starting rep{} protein RMSD analysis".format(index + 1))
+
             RMSD = calc_rmsd(args.protein_asl, cms_model, msys_model, tr, st)
-
-            print("Rep{} Protein RMSD Analysis Done".format(index + 1))
-
-            # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
+            # this will output the RMSD data to the output array in such a way that it writes down the column
             RMSD_output[:, index] = RMSD
 
+            logging.info("Rep{} Protein RMSD Analysis Done".format(index + 1))
+
         elif args.RMSF:
+            logging.info("Starting rep{} protein RMSF analysis".format(index + 1))
+
             residues, RMSF, results_SF = calc_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
-            print("Rep{} Protein RMSF Analysis Done".format(index + 1))
+            # output protein RMSF data to the output array
+            protein_RMSF_output[:, index] = RMSF
+
+            # Do block averaging
+            blocking_all = []
+            for i in results_SF[1].T:
+                blocking = reblock(i)
+                blocking_all.append(blocking)
+
+            optimal_block_num = []
+            for j in blocking_all:
+                optimal = find_optimal_block(ndata=traj_len, stats=j)
+                optimal_block_num.append(optimal)
+
+            optimal_block_num = [item for sublist in optimal_block_num for item in sublist]
+
+            # most common block number
+            most_common_number = max(set(optimal_block_num), key=optimal_block_num.count)
+
+            per_rep_SEM = []
+
+            # for every residue, in proteinSF divide that list into the optimal number of blocks
+            for resi in results_SF[1].T:
+                divided_list = np.array_split(np.asarray(resi), most_common_number)
+
+                # sem list
+                sem_list = []
+                for i in divided_list:
+                    sem_list.append(sem(i))
+
+                per_rep_SEM.append(sem(sem_list))
+
+            RMSF_SEM_output[:, index] = per_rep_SEM
+
+            logging.info("Rep{} Protein RMSF Analysis Done".format(index + 1))
+
         elif args.lig_RMSF:
+            # TODO this whole function is untested!!!!!
+            logging.info("Starting rep{} ligand RMSF analysis".format(index + 1))
+
             lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
-            print("Rep{} Ligand RMSF Analysis Done".format(index + 1))
+            lig_RMSF_output[:, index] = lig_rmsf_results
+            logging.info("Rep{} Ligand RMSF Analysis Done".format(index + 1))
 
         else:
-            # do the analysis
+            logging.info("Starting rep{} protein RMSD and RMSF analysis".format(index + 1))
+
+            # the default analysis is protein RMSD and RMSF
             residues, RMSF, RMSD, results_SF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
 
-            print("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
+            logging.info("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
 
             # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
             RMSD_output[:, index] = RMSD
