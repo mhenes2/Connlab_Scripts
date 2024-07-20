@@ -48,7 +48,8 @@ def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     # Calculates the c-alpha RMSD and RMSF
     # Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
 
-    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD and RMF analysis on - default is c alpha atoms
+    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
+    and RMF analysis on - default is c alpha atoms
     :param cms_model: the cms_model obtained from the read_cms_file function
     :param msys_model: the msys_model obtained from the read_cms_file function
     :param trj_out: the list of frames obtained from the read_trajectory function
@@ -127,9 +128,19 @@ def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     return residues, RMSF, RMSD, results_SF
 
 
-# Calculates the c-alpha RMSD and RMSF
-# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
 def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    """
+    # Calculates the RMSD and RMSF of the input ASL
+
+    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
+    and RMF analysis on - default is c alpha atoms
+    :param cms_model: the cms_model obtained from the read_cms_file function
+    :param msys_model: the msys_model obtained from the read_cms_file function
+    :param trj_out: the list of frames obtained from the read_trajectory function
+    :param st: structure element obtained from main
+    :return: a list the same length as the input trajectory. Each element of this list is the RMSD value for that frame
+    """
+
     # This is the ASL to use to calculate the RMSD and RMSF
     # We default to c alpha atoms but the user can select another set of atoms
     if optional_protein_asl:
@@ -138,12 +149,7 @@ def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
     else:
         ASL_calc = 'protein and a. CA'
 
-    # if the system has a ligand, this function should get the ligand automatically
-    # ligand[0] = cms structure of the ligand
-    # ligand[1] = ligand ASL
-    ligand = auto.getLigand(st)
-
-    # Get atom ids (aids) for the RMSD and RMSF calculation eg. if you want the RSMD for c-alpha carbons (CA), then
+    # Get atom ids (aids) for the RMSD and RMSF calculation e.g., if you want the RSMD for c-alpha carbons (CA), then
     # use 'a. CA' for the ASL_calc variable above
     # Documentation: http://content.schrodinger.com/Docs/r2018-2/python_api/product_specific.html
     aids = cms_model.select_atom(ASL_calc)
@@ -152,23 +158,18 @@ def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
     # we don't need a ref aids just the position of the reference
     ref_gids = topo.asl2gids(cms_model, ASL_calc, include_pseudoatoms=True)
 
-    # get the position for the reference gids from frame 1 - this is what we need
+    # get the position for the reference gids from the first frame (usually a structure or a HM) - this is what we need
     ref_pos = trj_out[0].pos(ref_gids)
 
-    # get the fit aids position - we're going to find on the protein backbone
+    # get the fit aids position - we're going to find on the protein backbone (this is the default for most calculations
     fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
 
     # get the fit_aids gids
     fit_gids = topo.aids2gids(cms_model, fit_aids, include_pseudoatoms=True)
 
-    # get the position of frame 1
+    # get the position of the first frame
     fit_ref_pos = trj_out[0].pos(fit_gids)
 
-    # calculate RMSD
-    # aids =
-    # ref_pos =
-    # fit_aids =
-    # fit_ref_pos =
     rmsd_analysis = analysis.RMSD(msys_model=msys_model, cms_model=cms_model, aids=aids, ref_pos=ref_pos,
                                   fit_aids=fit_aids, fit_ref_pos=fit_ref_pos)
 
@@ -177,9 +178,19 @@ def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
     return RMSD_results
 
 
-# Calculates the c-alpha RMSD and RMSF
-# Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
 def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+    """
+    calculate the RMSF
+
+    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
+    and RMF analysis on - default is c alpha atoms
+    :param cms_model: the cms_model obtained from the read_cms_file function
+    :param msys_model: the msys_model obtained from the read_cms_file function
+    :param trj_out: the list of frames obtained from the read_trajectory function
+    :param st: structure element obtained from main
+    :return: a list of resides, the RMSF results, and the square fluctations used for block averaging
+    """
+
     # This is the ASL to use to calculate the RMSD and RMSF
     # We default to c alpha atoms but the user can select another set of atoms
     if optional_protein_asl:
@@ -188,13 +199,6 @@ def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     else:
         ASL_calc = 'protein and a. CA'
 
-    # if the system has a ligand, this function should get the ligand automatically
-    # ligand[0] = cms structure of the ligand
-    # ligand[1] = ligand ASL
-    ligand = auto.getLigand(st)
-
-    # aids_rmsf = evaluate_asl(st, rmsf_aids_selection)
-    # TODO give the user the option to calculate the RMSF for something else other than c alpha atoms?
     aids_rmsf = cms_model.select_atom(ASL_calc)
 
     rmsf_fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
@@ -202,10 +206,6 @@ def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     rmsf_fit_gids = topo.aids2gids(cms_model, rmsf_fit_aids, include_pseudoatoms=True)
     rmsf_fit_ref_pos = trj_out[0].pos(rmsf_fit_gids)
 
-    # calculate RMSF
-    # aids =
-    # fit_aids =
-    # fit_ref_pos =
     rmsf_analysis = analysis.ProteinRMSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
                                          fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
 
@@ -221,8 +221,18 @@ def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
     return residues, RMSF, results_SF
 
 
-# Calculate the Ligand RMSF
 def calc_lig_rmsf(optional_ligand_asl, cms_model, msys_model, trj_out):
+    """
+    Calculate the Ligand RMSF
+
+    :param optional_ligand_asl: Using Maestro atom selection language to select the atoms to do the
+    ligand RMSF analysis on
+    :param cms_model: the cms_model obtained from the read_cms_file function
+    :param msys_model: the msys_model obtained from the read_cms_file function
+    :param trj_out: the list of frames obtained from the read_trajectory function
+    :return: a list of lists. the first list is the ligand aids and the second list is the ligand RMSF values
+    """
+
     # This evaluates if the user inputs a ligand ASL. If yes, then use the user input
     aids = cms_model.select_atom(optional_ligand_asl)
 
@@ -628,6 +638,7 @@ def write_ligRMSF_csv(atom_ids, lig_RMSF_output):
         with open(args.outname + '_lig_RMSF.csv', 'w') as f:
             writer = csv.writer(f, delimiter=',', lineterminator='\n')
             writer.writerows(lig_RMSF_final_output)
+
 
 def get_parser():
     script_desc = "This script will calculate the protein RMSD and RMSF, and ligand RMSF" \
