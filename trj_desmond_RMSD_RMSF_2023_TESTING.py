@@ -630,7 +630,7 @@ def write_ligRMSF_csv(atom_ids, lig_RMSF_output):
             writer.writerows(lig_RMSF_final_output)
 
 def get_parser():
-    script_desc = "This script will calculate the protein RMSD/RMSF and ligand RMSF, if a ligand is in the structure, " \
+    script_desc = "This script will calculate the protein RMSD and RMSF, and ligand RMSF" \
                   "for any number of trajectories. The script allows for optional protein and ligand asl (see below)"
 
     parser = argparse.ArgumentParser(description=script_desc)
@@ -639,7 +639,7 @@ def get_parser():
                         help= 'desmond trajectory directories to be used in RMSD and protein/ligand RMSF calculations',
                         nargs='+')
     parser.add_argument('-cms_file',
-                        help='desmond -out.cms',
+                        help='path to the desmond -out.cms file',
                         type=str,
                         required=True)
     parser.add_argument('-outname',
@@ -656,7 +656,7 @@ def get_parser():
                         type=str,
                         default='')
     parser.add_argument('-s',
-                        help="Use every nth frame of the trajectory. Default is 1 (i.e., use every frame in the trj."
+                        help="Use every nth frame of the trajectory. Default is 1 (i.e., use every frame in the trj)"
                              "Start:End:Step",
                         type=str,
                         default="0:-1:1")
