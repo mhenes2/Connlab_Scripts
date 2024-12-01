@@ -672,7 +672,7 @@ def get_parser():
                         help="Use every nth frame of the trajectory. Default is 1 (i.e., use every frame in the trj)"
                              "Start:End:Step",
                         type=str,
-                        default="0:-1:1")
+                        required=False)
     parser.add_argument('-RMSD',
                         help="Do only the RMSD analysis",
                         type=bool,
@@ -706,7 +706,7 @@ def main(args):
         # get the first frame, last frame, and the step the user wants to take
         start, end, step = args.s.split(":")
         if end == -1:
-            last_index = len(tr)-1
+            last_index = len(tr)
             tr = tr[int(start):int(last_index)]
         else:
             tr = tr[int(start):int(end)]
@@ -740,10 +740,12 @@ def main(args):
     for index, trajectory in enumerate(args.infiles):
         # pass the trj to the read_trajectory function. returns a list of frames
         tr = read_trajectory(trajectory)
+        traj_len = len(tr)
 
         # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
         # end on the last frame, and take steps of 1
         if args.s:
+
             # get the first frame, last frame, and the step the user wants to take
             start, end, step = args.s.split(":")
             if end == -1:
