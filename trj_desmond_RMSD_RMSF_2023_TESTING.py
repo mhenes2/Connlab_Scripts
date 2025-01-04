@@ -215,11 +215,13 @@ def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
                                                fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
 
     results = (analysis.analyze(trj_out, rmsf_analysis))
-    residues = results[0][0]
-    RMSF = results[0][1]
+    residues = results[0]
+    RMSF = results[1]
 
     results_SF = (analysis.analyze(trj_out, per_resi_per_frame_SF))
 
+    print (residues)
+    print (RMSF)
     return residues, RMSF, results_SF
 
 
