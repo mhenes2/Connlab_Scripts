@@ -120,8 +120,8 @@ def main():
     # Load models and structure for ASL
     msys_model, cms_model = read_models(args.cms)
 
+    tmpfiles = []
     for idx, trj_dir in enumerate(args.infiles, start=1):
-        tmpfiles = []
         # write out the new cms file first
         new_cms(args.asl, args.name, cms_model, idx)
 
