@@ -1,4 +1,33 @@
-# import os
+import os
+import sys
+
+# ──────────── 1) Pick the “Next Available” GPU via pynvml ────────────
+try:
+    import pynvml
+except ImportError:
+    sys.exit("ERROR: pynvml is required. Please install via `pip install pynvml`.")
+
+pynvml.nvmlInit()
+gpu_count = pynvml.nvmlDeviceGetCount()
+selected_gpu = None
+max_free_mem = 0
+
+for i in range(gpu_count):
+    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+    info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+    free_mem = info.free  # bytes
+    if free_mem > max_free_mem:
+        max_free_mem = free_mem
+        selected_gpu = i
+
+if selected_gpu is None:
+    sys.exit("No CUDA GPU available—exiting.")
+
+# Instruct ALL CUDA libraries (including CuPy) to see only the chosen GPU
+os.environ["CUDA_VISIBLE_DEVICES"] = str(selected_gpu)
+print(f"[*] Selected physical GPU {selected_gpu} (free ≈ {max_free_mem/1e9:.2f} GB). "
+      f"Setting CUDA_VISIBLE_DEVICES={selected_gpu}")
+
 from schrodinger.application.desmond.packages import traj, topo
 import itertools
 import numpy as np
