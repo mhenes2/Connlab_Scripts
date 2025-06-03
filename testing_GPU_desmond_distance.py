@@ -170,20 +170,20 @@ def main(args):
 
         # get the frame coordinates for euclidean (xyz) distance measurement
         frame_coords = [f.pos() for f in trj]
-
-        n_frames, n_atoms, _ = frame_coords.shape
+        n_frames, n_atoms = len(frame_coords), len(frame_coords[1])
 
         # decide batch size
-        batch = 100 or n_frames
+        # batch = 100 or n_frames
+        batch = 10
 
         # allocate accumulator on GPU
-        sum_d = cp.zeros((n_atoms, n_atoms), dtype=cp.float64)
+        sum_d = cp.zeros((n_atoms, n_atoms), dtype=cp.float16)
 
         # process in batches
         for start in range(0, n_frames, batch):
             end = min(start + batch, n_frames)
             # move this batch to GPU: shape (b, n_atoms, 3)
-            coords_batch = cp.array(frame_coords[start:end], dtype=cp.float64)
+            coords_batch = cp.array(frame_coords[start:end], dtype=cp.float16)
 
             # compute pairwise diffs in one go:
             #   coords_batch[:, :, None, :] has shape (b, n_atoms, 1, 3)
@@ -205,8 +205,8 @@ def main(args):
 
         # bring back to CPU and save
         avg_d_np = cp.asnumpy(avg_d)
-        np.savetxt(args.output, avg_d_np, delimiter=",")
-        print(f"[GPU-batched] Wrote average distance matrix ({n_atoms}×{n_atoms}) to {args.output}")
+        np.savetxt(args.outname, avg_d_np, delimiter=",")
+        print(f"[GPU-batched] Wrote average distance matrix ({n_atoms}×{n_atoms}) to {args.outname}")
 
 
 if __name__ == '__main__':
