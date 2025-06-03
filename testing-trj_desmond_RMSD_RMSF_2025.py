@@ -473,6 +473,9 @@ def main():
     # Preload first trajectory for shape and timing
     frames0 = read_traj(Path(args.infiles[0]))
     frames0 = slice_frames(frames0, args.slice)
+    # Extract each frame’s time (in ps), then convert to nanoseconds
+    times_ps = np.array([f.time for f in frames0])       # in ps
+    times_ns = times_ps / 1000.0                          # convert to ns
     traj_len = len(frames0)
     total_time = frames0[-1].time  # Trajectory end time in ps
 
@@ -507,10 +510,36 @@ def main():
             _, rmsf_vals, raw_fluct = calculate_rmsf(
                 msys_model, cms_model, st, frames, args.protein_asl)
             for ridx, vals in enumerate(raw_fluct.T):
+                # stats = reblock(np.asarray(vals))
+                # blk = find_optimal_block(len(vals), stats)
+                # chunks = np.array_split(vals, blk)
+                # rmsf_sem[ridx, idx-1] = sem([sem(chunk) for chunk in chunks])
                 stats = reblock(np.asarray(vals))
-                blk = find_optimal_block(len(vals), stats)
-                chunks = np.array_split(vals, blk)
-                rmsf_sem[ridx, idx-1] = sem([sem(chunk) for chunk in chunks])
+                blk_list = find_optimal_block(len(vals), stats)
+
+                # blk_list should be a Python list of length 1 (since data is 1D)
+                blk_idx = blk_list[0]
+
+                # If blk_idx is not a finite positive integer, fall back to single‐block sem
+                if not np.isfinite(blk_idx) or int(blk_idx) < 1:
+                    # no valid blocking, just SEM over the raw fluctuations
+                    rmsf_sem[ridx, idx - 1] = sem(vals)
+                else:
+                    n_chunks = int(blk_idx)
+                    # Split vals into n_chunks “blocks”.  Any chunk of length <2 will produce nan sem,
+                    # so we filter those out in the inner list comprehension.
+                    chunks = np.array_split(vals, n_chunks)
+
+                    # Compute SEM of each sub‐chunk, then take SEM across those chunk‐wise SEMs
+                    inner_sems = [sem(chunk) for chunk in chunks if len(chunk) > 1]
+                    if len(inner_sems) > 1:
+                        rmsf_sem[ridx, idx - 1] = sem(inner_sems)
+                    elif len(inner_sems) == 1:
+                        # If only one block had ≥2 points, just use its SEM
+                        rmsf_sem[ridx, idx - 1] = inner_sems[0]
+                    else:
+                        # If every chunk was size 1, fall back to sem over entire data
+                        rmsf_sem[ridx, idx - 1] = sem(vals)
             rmsf_results[:, idx-1] = rmsf_vals
 
         # Ligand RMSF calculation
@@ -522,20 +551,68 @@ def main():
     # Write out final CSV files
     base = args.outname
     if args.do_rmsd or not any([args.do_rmsf, args.do_lig_rmsf]):
-        write_csv(f"{base}_RMSD", list(range(traj_len)), rmsd_results,
-                  ['Frame', *[f"Rep{j}" for j in range(1, n_reps+1)]])
+        avg_rmsd = np.mean(rmsd_results, axis=1)  # shape = (traj_len,)
+        # Stack columns: first times_ns, then all replicate columns, then avg_rmsd
+        combined = np.column_stack((times_ns, rmsd_results, avg_rmsd))
+        # Header list:
+        headers = ['Time_ns'] + [f"Rep{j}" for j in range(1, n_reps+1)] + ['Average']
+        # Write out CSV manually
+        out_path = Path(f"{base}_rmsd.csv")
+        with out_path.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(headers)
+            for row in combined:
+                writer.writerow(row.tolist())
+        print(f"Wrote RMSD vs. time CSV: {out_path}")
+
     if args.do_rmsf or not any([args.do_rmsd, args.do_lig_rmsf]):
-        write_csv(f"{base}_RMSF", residues, rmsf_results,
-                  ['Residue', *[f"Rep{j}" for j in range(1, n_reps+1)]])
-        write_csv(f"{base}_RMSF_SEM", residues, rmsf_sem,
-                  ['Residue', *[f"Rep{j}" for j in range(1, n_reps+1)]])
+        # 1) Compute per-residue averages across replicates
+        # rmsf_results.shape = (n_res, n_reps)
+        avg_rmsf = np.mean(rmsf_results, axis=1)  # shape = (n_res,)
+
+        # rmsf_sem.shape = (n_res, n_reps)
+        avg_sem = np.mean(rmsf_sem, axis=1)  # shape = (n_res,)
+
+        # 2) Stack on the “Average” column
+        # For RMSF: each row will be [rmsf_rep1, rmsf_rep2, …, rmsf_repN, avg_rmsf]
+        combined_rmsf = np.column_stack((rmsf_results, avg_rmsf))  # shape = (n_res, n_reps+1)
+
+        # For SEM: each row will be [sem_rep1, sem_rep2, …, sem_repN, avg_sem]
+        combined_sem = np.column_stack((rmsf_sem, avg_sem))  # shape = (n_res, n_reps+1)
+
+        # 3) Build headers with “Average” as last column
+        base_headers = [f"Rep{j}" for j in range(1, n_reps + 1)]
+        rmsf_headers = ['Residue'] + base_headers + ['Average']
+        sem_headers = ['Residue'] + base_headers + ['Average']
+
+        # 4) Write out the RMSF CSV (per-residue values plus average)
+        out_rmsf = Path(f"{base}_RMSF.csv")
+        with out_rmsf.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(rmsf_headers)
+            for ridx, res_label in enumerate(residues):
+                # row_data = [rep1, rep2, …, repN, avg_rmsf]
+                row_data = combined_rmsf[ridx].tolist()
+                writer.writerow([res_label, *row_data])
+        print(f"Wrote RMSF CSV with average column: {out_rmsf}")
+
+        # 5) Write out the RMSF_SEM CSV (per-residue SEM plus average SEM)
+        out_sem = Path(f"{base}_RMSF_SEM.csv")
+        with out_sem.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(sem_headers)
+            for ridx, res_label in enumerate(residues):
+                row_data = combined_sem[ridx].tolist()
+                writer.writerow([res_label, *row_data])
+        print(f"Wrote RMSF_SEM CSV with average column: {out_sem}")
+
     if args.do_lig_rmsf:
         write_csv(f"{base}_LigRMSF", lig_atom_ids, lig_results,
                   ['Atom', *[f"Rep{j}" for j in range(1, n_reps+1)]])
 
     # Log total runtime
     duration = datetime.now() - start_time
-    logger.info(f"Total runtime: {duration}")
+    print(f"Total runtime: {duration}")
 
 
 if __name__ == '__main__':
