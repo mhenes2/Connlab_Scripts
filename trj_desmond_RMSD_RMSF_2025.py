@@ -1,262 +1,205 @@
-import matplotlib
-matplotlib.use('Agg')
-from schrodinger.application.desmond.packages import traj, topo, analysis
-import csv
-from datetime import datetime
+#!/usr/bin/env python3
+"""
+refactored_script.py
+
+This script performs RMSD/RMSF analysis on Desmond trajectories.
+It can compute:
+- Protein C-alpha RMSD over time
+- Protein C-alpha RMSF per residue (with block-averaging error estimation)
+- Ligand RMSF per atom
+
+Usage:
+    python refactored_script.py traj_dir1 traj_dir2 ... \
+        -cms path/to/out.cms -o output_base_name [options]
+
+Options:
+    -p, --protein_asl   Maestro ASL for protein atoms (default: 'protein and a. CA')
+    -l, --ligand_asl    Maestro ASL for ligand atoms (default: none)
+    -s, --slice         Frame slice as start:end:step
+    --rmsd              Compute only RMSD
+    --rmsf              Compute only RMSF
+    --lig_rmsf          Compute only ligand RMSF
+"""
+
+import argparse  # For parsing command-line options
+import csv       # For writing CSV output files
+import logging   # For logging progress and info
+from datetime import datetime  # To measure runtime duration
+from pathlib import Path        # For filesystem path handling
+
+import numpy as np          # Numerical operations
+from scipy.stats import sem  # Standard error of the mean calculation
 from schrodinger import structure
-from schrodinger.structutils.analyze import evaluate_asl
 from schrodinger.application.desmond import automatic_analysis_generator as auto
-import matplotlib.pyplot as plt
-import numpy as np
-import argparse
+from schrodinger.application.desmond.packages import analysis, topo, traj
+from schrodinger.structutils.analyze import evaluate_asl
 import collections
-from scipy.stats import sem
-import logging
 
 
-# get the time the script starts running - This is used so we can know how long things take to run
-startTime = datetime.now()
-# creating the logger object
-logger = logging.getLogger()
+# Configure logging to output timestamps and log levels
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
-def read_cms_file(cms_file):
+
+def parse_args() -> argparse.Namespace:
     """
-    This function reads the cms file and returns the msys_model and cms_model
-    :param str cms_file: the file path to the trajectory cms file
-    :return: the system model (mysy_model) and the cms_model used by many analysis function
+    Parse command-line arguments and return namespace.
     """
+    parser = argparse.ArgumentParser(
+        description="Calculate RMSD/RMSF for Desmond trajectories"
+    )
+    # Input trajectory directories (one or more)
+    parser.add_argument('infiles', nargs='+',
+                        help='Desmond trajectory directories')
+    # Required path to CMS model
+    parser.add_argument('-cms', dest='cms_file', required=True,
+                        help='Path to the Desmond -out.cms file')
+    # Output base name for CSV files
+    parser.add_argument('-o', dest='outname', required=True,
+                        help='Base name for output CSV files')
+    # Optional ASL for protein selection
+    parser.add_argument('-p', '--protein_asl', dest='protein_asl',
+                        default='protein and a. CA',
+                        help='Protein atom selection (Maestro ASL)')
+    # Optional ASL for ligand selection
+    parser.add_argument('-l', '--ligand_asl', dest='ligand_asl',
+                        default='',
+                        help='Ligand atom selection (Maestro ASL)')
+    # Optional slicing of frames
+    parser.add_argument('-s', '--slice', dest='slice', default=None,
+                        help='Frame slice specifier as start:end:step')
+    # Flags to compute only a subset of analyses
+    parser.add_argument('--rmsd', action='store_true', dest='do_rmsd',
+                        help='Compute only RMSD')
+    parser.add_argument('--rmsf', action='store_true', dest='do_rmsf',
+                        help='Compute only RMSF')
+    parser.add_argument('--lig_rmsf', action='store_true', dest='do_lig_rmsf',
+                        help='Compute only ligand RMSF')
+    return parser.parse_args()
 
-    # Load the cms_model
-    msys_model, cms_model = topo.read_cms(cms_file)
-    # return the msys_model and cms_model
-    return msys_model, cms_model
 
-
-def read_trajectory(trj_in):
+def read_models(cms_path: Path):
     """
-    This function reads the trajectory and returns the trj_out (a frame list)
-    :param str trj_in: the file path to the trajecory folder
-    :return: a list of frames to be used by the analysis functions
+    Load MSYS and CMS models, plus structure for reference.
     """
+    # Parse CMS file to get MSYS and CMS models
+    msys_model, cms_model = topo.read_cms(str(cms_path))
+    # Read structure for ASL evaluation
+    st = structure.Structure.read(str(cms_path))
+    return msys_model, cms_model, st
 
-    # Load the trajectory
-    trj_out = traj.read_traj(trj_in)
-    # return the trajectory object
-    return trj_out
 
-
-def calc_rmsd_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+def read_traj(trj_path: Path) -> list:
     """
-    # Calculates the c-alpha RMSD and RMSF
-    # Needs the cms_model, msys_model, and the trajectory. Returns the results as an array
-
-    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
-    and RMF analysis on - default is c alpha atoms
-    :param cms_model: the cms_model obtained from the read_cms_file function
-    :param msys_model: the msys_model obtained from the read_cms_file function
-    :param trj_out: the list of frames obtained from the read_trajectory function
-    :param st: structure element obtained from main
-    :return: list of residues, RMSF , results_SF
+    Read trajectory frames from a Desmond directory.
     """
-
-    # This is the ASL to use to calculate the RMSD and RMSF
-    # We default to c alpha atoms but the user can select another set of atoms
-    if optional_protein_asl:
-        ASL_calc = optional_protein_asl
-    # if the user didn't provide a protein ASL, then default to the c-alpha
-    else:
-        ASL_calc = 'protein and a. CA'
-
-    # if the system has a ligand, this function should get the ligand automatically
-    # ligand[0] = cms structure of the ligand
-    # ligand[1] = ligand ASL
-    ligand = auto.getLigand(st)
-
-    # Get atom ids (aids) for the RMSD and RMSF calculation eg. if you want the RSMD for c-alpha carbons (CA), then
-    # use 'a. CA' for the ASL_calc variable above
-    # Documentation: http://content.schrodinger.com/Docs/r2018-2/python_api/product_specific.html
-    aids = cms_model.select_atom(ASL_calc)
-
-    # Get the aids for the reference to be used in the RMSD calculation -
-    # we don't need a ref aids just the position of the reference
-    ref_gids = topo.asl2gids(cms_model, ASL_calc, include_pseudoatoms=True)
-
-    # get the position for the reference gids from frame 1 - this is what we need
-    ref_pos = trj_out[0].pos(ref_gids)
-
-    # get the fit aids position - we're going to find on the protein backbone
-    fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
-
-    # get the fit_aids gids
-    fit_gids = topo.aids2gids(cms_model, fit_aids, include_pseudoatoms=True)
-
-    # get the position of frame 1
-    fit_ref_pos = trj_out[0].pos(fit_gids)
-
-    # calculate RMSD
-    # aids =
-    # ref_pos =
-    # fit_aids =
-    # fit_ref_pos =
-    rmsd_analysis = analysis.RMSD(msys_model=msys_model, cms_model=cms_model, aids=aids, ref_pos=ref_pos,
-                                  fit_aids=fit_aids, fit_ref_pos=fit_ref_pos)
-
-    # aids_rmsf = evaluate_asl(st, rmsf_aids_selection)
-    # TODO give the user the option to calculate the RMSF for something else other than c alpha atoms?
-    aids_rmsf = cms_model.select_atom(ASL_calc)
-
-    rmsf_fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
-
-    rmsf_fit_gids = topo.aids2gids(cms_model, rmsf_fit_aids, include_pseudoatoms=True)
-    rmsf_fit_ref_pos = trj_out[0].pos(rmsf_fit_gids)
-
-    # calculate RMSF
-    # aids =
-    # fit_aids =
-    # fit_ref_pos =
-    rmsf_analysis = analysis.ProteinRMSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
-                                         fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
-
-    per_resi_per_frame_SF = analysis.ProteinSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
-                                               fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
-
-    results = (analysis.analyze(trj_out, rmsf_analysis, rmsd_analysis))
-    residues = results[0][0]
-    RMSF = results[0][1]
-    RMSD = results[1]
-
-    results_SF = (analysis.analyze(trj_out, per_resi_per_frame_SF))
-
-    return residues, RMSF, RMSD, results_SF
+    # Convert generator to list for multiple passes
+    return list(traj.read_traj(str(trj_path)))
 
 
-def calc_rmsd(optional_protein_asl, cms_model, msys_model, trj_out, st):
+def slice_frames(frames: list, slice_spec: str) -> list:
     """
-    # Calculates the RMSD and RMSF of the input ASL
-
-    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
-    and RMF analysis on - default is c alpha atoms
-    :param cms_model: the cms_model obtained from the read_cms_file function
-    :param msys_model: the msys_model obtained from the read_cms_file function
-    :param trj_out: the list of frames obtained from the read_trajectory function
-    :param st: structure element obtained from main
-    :return: a list the same length as the input trajectory. Each element of this list is the RMSD value for that frame
+    Slice frames list by start:end:step if specified.
     """
-
-    # This is the ASL to use to calculate the RMSD and RMSF
-    # We default to c alpha atoms but the user can select another set of atoms
-    if optional_protein_asl:
-        ASL_calc = optional_protein_asl
-    # if the user didn't provide a protein ASL, then default to the c-alpha
-    else:
-        ASL_calc = 'protein and a. CA'
-
-    # Get atom ids (aids) for the RMSD and RMSF calculation e.g., if you want the RSMD for c-alpha carbons (CA), then
-    # use 'a. CA' for the ASL_calc variable above
-    # Documentation: http://content.schrodinger.com/Docs/r2018-2/python_api/product_specific.html
-    aids = cms_model.select_atom(ASL_calc)
-
-    # Get the aids for the reference to be used in the RMSD calculation -
-    # we don't need a ref aids just the position of the reference
-    ref_gids = topo.asl2gids(cms_model, ASL_calc, include_pseudoatoms=True)
-
-    # get the position for the reference gids from the first frame (usually a structure or a HM) - this is what we need
-    ref_pos = trj_out[0].pos(ref_gids)
-
-    # get the fit aids position - we're going to find on the protein backbone (this is the default for most calculations
-    fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
-
-    # get the fit_aids gids
-    fit_gids = topo.aids2gids(cms_model, fit_aids, include_pseudoatoms=True)
-
-    # get the position of the first frame
-    fit_ref_pos = trj_out[0].pos(fit_gids)
-
-    rmsd_analysis = analysis.RMSD(msys_model=msys_model, cms_model=cms_model, aids=aids, ref_pos=ref_pos,
-                                  fit_aids=fit_aids, fit_ref_pos=fit_ref_pos)
-
-    RMSD_results = (analysis.analyze(trj_out, rmsd_analysis))
-
-    return RMSD_results
+    if not slice_spec:
+        return frames  # No slicing requested
+    start, end, step = map(int, slice_spec.split(':'))
+    # Use None for end if negative or zero implies til end
+    end_idx = None if end <= 0 else end
+    return frames[start:end_idx:step]
 
 
-def calc_rmsf(optional_protein_asl, cms_model, msys_model, trj_out, st):
+def default_asl(user_asl: str, default: str = 'protein and a. CA') -> str:
     """
-    calculate the RMSF
-
-    :param str optional_protein_asl: Using Maestro atom selection language to select the atoms to do the RMSD
-    and RMF analysis on - default is c alpha atoms
-    :param cms_model: the cms_model obtained from the read_cms_file function
-    :param msys_model: the msys_model obtained from the read_cms_file function
-    :param trj_out: the list of frames obtained from the read_trajectory function
-    :param st: structure element obtained from main
-    :return: a list of resides, the RMSF results, and the square fluctations used for block averaging
+    Return user-defined ASL or fallback to default.
     """
-
-    # This is the ASL to use to calculate the RMSD and RMSF
-    # We default to c alpha atoms but the user can select another set of atoms
-    if optional_protein_asl:
-        ASL_calc = optional_protein_asl
-    # if the user didn't provide a protein ASL, then default to the c-alpha
-    else:
-        ASL_calc = 'protein and a. CA'
-
-    aids_rmsf = cms_model.select_atom(ASL_calc)
-
-    rmsf_fit_aids = evaluate_asl(st, '(protein and backbone) and not atom.ele H')
-
-    rmsf_fit_gids = topo.aids2gids(cms_model, rmsf_fit_aids, include_pseudoatoms=True)
-    rmsf_fit_ref_pos = trj_out[0].pos(rmsf_fit_gids)
-
-    rmsf_analysis = analysis.ProteinRMSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
-                                         fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
-
-    per_resi_per_frame_SF = analysis.ProteinSF(msys_model=msys_model, cms_model=cms_model, aids=aids_rmsf,
-                                               fit_aids=rmsf_fit_aids, fit_ref_pos=rmsf_fit_ref_pos)
-
-    results = (analysis.analyze(trj_out, rmsf_analysis))
-    residues = results[0]
-    RMSF = results[1]
-
-    results_SF = (analysis.analyze(trj_out, per_resi_per_frame_SF))
-
-    print (residues)
-    print (RMSF)
-    return residues, RMSF, results_SF
+    return user_asl or default
 
 
-def calc_lig_rmsf(optional_ligand_asl, cms_model, msys_model, trj_out):
+def calculate_rmsd(msys, cms, st, frames, asl: str) -> np.ndarray:
     """
-    Calculate the Ligand RMSF
-
-    :param optional_ligand_asl: Using Maestro atom selection language to select the atoms to do the
-    ligand RMSF analysis on
-    :param cms_model: the cms_model obtained from the read_cms_file function
-    :param msys_model: the msys_model obtained from the read_cms_file function
-    :param trj_out: the list of frames obtained from the read_trajectory function
-    :return: a list of lists. the first list is the ligand aids and the second list is the ligand RMSF values
+    Calculate backbone RMSD of selected atoms over frames.
     """
+    # Determine selection of atoms
+    asl_sel = default_asl(asl)
+    # Get atom IDs (aids) for reference and fitting
+    aids = cms.select_atom(asl_sel)
+    gids_ref = topo.asl2gids(cms, asl_sel, include_pseudoatoms=True)
+    ref_pos = frames[0].pos(gids_ref)  # Reference positions from first frame
 
-    # This evaluates if the user inputs a ligand ASL. If yes, then use the user input
-    aids = cms_model.select_atom(optional_ligand_asl)
+    # Fit to backbone (excluding hydrogens)
+    fit_asl = '(protein and backbone) and not atom.ele H'
+    fit_aids = evaluate_asl(st, fit_asl)
+    fit_gids = topo.aids2gids(cms, fit_aids, include_pseudoatoms=True)
+    fit_pos = frames[0].pos(fit_gids)
 
-    # we're fitting on the protein backbone
-    fit_ASL = '(protein and backbone) and not atom.ele H'
-    fit_aids = cms_model.select_atom(fit_ASL)
+    # Set up RMSD calculation object
+    rmsd_calc = analysis.RMSD(
+        msys_model=msys, cms_model=cms,
+        aids=aids, ref_pos=ref_pos,
+        fit_aids=fit_aids, fit_ref_pos=fit_pos
+    )
+    # Run analysis and return as NumPy array
+    return np.array(analysis.analyze(frames, rmsd_calc))
 
-    # get the first frame of the trajectory
-    fr = trj_out[0]
 
-    fit_gids = topo.aids2gids(cms_model, fit_aids, include_pseudoatoms=True)
-    fit_ref_pos = fr.pos(fit_gids)
+def calculate_rmsf(msys, cms, st, frames, asl: str):
+    """
+    Calculate per-residue RMSF and raw fluctuation data.
+    """
+    asl_sel = default_asl(asl)
+    aids = cms.select_atom(asl_sel)
+    fit_asl = '(protein and backbone) and not atom.ele H'
+    fit_aids = evaluate_asl(st, fit_asl)
+    fit_gids = topo.aids2gids(cms, fit_aids, include_pseudoatoms=True)
+    fit_pos = frames[0].pos(fit_gids)
 
-    lig_RMSF_analysis = analysis.RMSF(msys_model, cms_model, aids, fit_aids, fit_ref_pos)
+    # Set up RMSF and fluctuation calculators
+    rmsf_calc = analysis.ProteinRMSF(
+        msys_model=msys, cms_model=cms,
+        aids=aids, fit_aids=fit_aids, fit_ref_pos=fit_pos
+    )
+    sf_calc = analysis.ProteinSF(
+        msys_model=msys, cms_model=cms,
+        aids=aids, fit_aids=fit_aids, fit_ref_pos=fit_pos
+    )
 
-    results = analysis.analyze(trj_out, lig_RMSF_analysis)
+    # Analyze frames
+    residues, rmsf_vals = analysis.analyze(frames, rmsf_calc)
+    raw_fluct = analysis.analyze(frames, sf_calc)[1]
+    return residues, rmsf_vals, raw_fluct
 
-    lig_aids = results[0]
-    lig_rmsf = results[1]
-    return lig_aids, lig_rmsf
+
+def calculate_ligand_rmsf(msys, cms, frames, asl: str):
+    """
+    Calculate RMSF for ligand atoms.
+    """
+    aids = cms.select_atom(asl)
+    fit_asl = '(protein and backbone) and not atom.ele H'
+    fit_aids = cms.select_atom(fit_asl)
+    fit_gids = topo.aids2gids(cms, fit_aids, include_pseudoatoms=True)
+    fit_pos = frames[0].pos(fit_gids)
+
+    lig_calc = analysis.RMSF(msys, cms, aids, fit_aids, fit_pos)
+    atom_ids, rmsf_vals = analysis.analyze(frames, lig_calc)
+    return atom_ids, rmsf_vals
+
+
+def write_csv(outname: str, labels: list, data: np.ndarray, headers: list):
+    """
+    Write labeled 2D data to CSV.
+    """
+    path = Path(f"{outname}.csv")
+    # Open file for writing
+    with path.open('w', newline='') as f:
+        writer = csv.writer(f)
+        # Header row
+        writer.writerow(headers)
+        # Data rows with label and values
+        for lbl, row in zip(labels, data):
+            writer.writerow([lbl, *row])
+    logger.info(f"Wrote output file: {path}")
 
 
 # See (https://pyblock.readthedocs.io/_/downloads/en/stable/pdf/) for block averaging
@@ -516,388 +459,161 @@ References
     return optimal_block
 
 
-def write_csv(cms_model, RMSD_output, protein_RMSF_output, traj_len, RMSF_row_labels, fr, errors,
-              atom_ids, lig_RMSF_output):
-    RMSD_row_labels = list(range(0, traj_len, 1))
-
-    RMSF_row_labels_ASL_calc = 'protein and a. CA'
-    RMSF_row_labels_aids = cms_model.select_atom(RMSF_row_labels_ASL_calc)
-
-    RMSD_output = np.reshape(RMSD_output, (traj_len, len(args.infiles)))
-    protein_RMSF_output = np.reshape(protein_RMSF_output, (len(RMSF_row_labels_aids), len(args.infiles)))
-    # TODO deal with no ligands
-    # lig_RMSF_output = np.reshape(lig_RMSF_output, (len(ligaids), len(args.infiles)))
-
-    RMSD_column_labels = []
-    for i in range(len(args.infiles)):
-        RMSD_column_labels.append('{} rep{} CA RMSD'.format(args.outname, i+1))
-    RMSD_column_labels.insert(0, 'Frame #')
-    RMSD_column_labels.insert(1, 'Time [ns]')
-    RMSD_column_labels.append('{} Average CA RMSD'.format(args.outname))
-
-    RMSF_column_labels = []
-    for i in range(len(args.infiles)):
-        RMSF_column_labels.append('{} rep{} CA RMSF'.format(args.outname, i+1))
-    RMSF_column_labels.insert(0, 'Residue ID')
-    RMSF_column_labels.append('{} Average CA RMSF'.format(args.outname))
-    RMSF_column_labels.append ('{} SEM CA RMSF'.format (args.outname))
-
-    # write out the final protein RMSD results
-    RMSD_average = np.average(RMSD_output, axis=1)
-    sim_time = np.around(np.linspace(0, fr/1000, traj_len), 5)
-    RMSD_final_output = np.column_stack((RMSD_row_labels, sim_time, RMSD_output, RMSD_average))
-    RMSD_final_output = np.vstack((RMSD_column_labels, RMSD_final_output))
-    with open(args.outname + '_RMSD.csv', 'w') as f:
-        writer = csv.writer(f, delimiter=',', lineterminator='\n')
-        writer.writerows(RMSD_final_output)
-
-    # write out the protein RMSF results
-    RMSF_average = np.average(protein_RMSF_output, axis=1)
-    RMSF_SEM = np.average(errors, axis=1)
-
-    RMSF_final_output = np.column_stack((RMSF_row_labels, protein_RMSF_output, RMSF_average, RMSF_SEM))
-    RMSF_final_output = np.vstack((RMSF_column_labels, RMSF_final_output))
-    with open(args.outname + '_RMSF.csv', 'w') as f:
-        writer = csv.writer(f, delimiter=',', lineterminator='\n')
-        writer.writerows(RMSF_final_output)
-
-
-    if atom_ids != '':
-        lig_RMSF_column_labels = []
-        for i in range(len(args.infiles)):
-            lig_RMSF_column_labels.append('{} rep{} Ligand RMSF'.format(args.outname, i + 1))
-
-        lig_RMSF_column_labels.insert(0, 'Ligand Atoms')
-        lig_RMSF_column_labels.append('{} Average Ligand RMSF'.format(args.outname))
-
-        lig_RMSF_average = np.average(lig_RMSF_output, axis=1)
-
-        lig_RMSF_final_output = np.column_stack((atom_ids, lig_RMSF_output, lig_RMSF_average))
-        lig_RMSF_final_output = np.vstack((lig_RMSF_column_labels, lig_RMSF_final_output))
-        with open(args.outname + '_lig_RMSF.csv', 'w') as f:
-            writer = csv.writer(f, delimiter=',', lineterminator='\n')
-            writer.writerows(lig_RMSF_final_output)
-
-
-def write_RMSD_csv(RMSD_output, traj_len, fr):
-    RMSD_row_labels = list(range(0, traj_len, 1))
-
-    RMSD_output = np.reshape(RMSD_output, (traj_len, len(args.infiles)))
-
-    RMSD_column_labels = []
-    for i in range(len(args.infiles)):
-        RMSD_column_labels.append('{} rep{} CA RMSD'.format(args.outname, i+1))
-    RMSD_column_labels.insert(0, 'Frame #')
-    RMSD_column_labels.insert(1, 'Time [ns]')
-    RMSD_column_labels.append('{} Average CA RMSD'.format(args.outname))
-
-    # write out the final protein RMSD results
-    RMSD_average = np.average(RMSD_output, axis=1)
-    sim_time = np.around(np.linspace(0, fr/1000, traj_len), 5)
-    RMSD_final_output = np.column_stack((RMSD_row_labels, sim_time, RMSD_output, RMSD_average))
-    RMSD_final_output = np.vstack((RMSD_column_labels, RMSD_final_output))
-    with open(args.outname + '_RMSD.csv', 'w') as f:
-        writer = csv.writer(f, delimiter=',', lineterminator='\n')
-        writer.writerows(RMSD_final_output)
-
-
-def write_RMSF_csv(cms_model, protein_RMSF_output, RMSF_row_labels, errors):
-
-    RMSF_row_labels_ASL_calc = 'protein and a. CA'
-    RMSF_row_labels_aids = cms_model.select_atom(RMSF_row_labels_ASL_calc)
-
-    protein_RMSF_output = np.reshape(protein_RMSF_output, (len(RMSF_row_labels_aids), len(args.infiles)))
-
-    RMSF_column_labels = []
-    for i in range(len(args.infiles)):
-        RMSF_column_labels.append('{} rep{} CA RMSF'.format(args.outname, i+1))
-    RMSF_column_labels.insert(0, 'Residue ID')
-    RMSF_column_labels.append('{} Average CA RMSF'.format(args.outname))
-    RMSF_column_labels.append ('{} SEM CA RMSF'.format (args.outname))
-
-    # write out the protein RMSF results
-    RMSF_average = np.average(protein_RMSF_output, axis=1)
-    RMSF_SEM = np.average(errors, axis=1)
-
-    RMSF_final_output = np.column_stack((RMSF_row_labels, protein_RMSF_output, RMSF_average, RMSF_SEM))
-    RMSF_final_output = np.vstack((RMSF_column_labels, RMSF_final_output))
-    with open(args.outname + '_RMSF.csv', 'w') as f:
-        writer = csv.writer(f, delimiter=',', lineterminator='\n')
-        writer.writerows(RMSF_final_output)
-
-
-def write_ligRMSF_csv(atom_ids, lig_RMSF_output):
-    if atom_ids != '':
-        lig_RMSF_column_labels = []
-        for i in range(len(args.infiles)):
-            lig_RMSF_column_labels.append('{} rep{} Ligand RMSF'.format(args.outname, i + 1))
-
-        lig_RMSF_column_labels.insert(0, 'Ligand Atoms')
-        lig_RMSF_column_labels.append('{} Average Ligand RMSF'.format(args.outname))
-
-        lig_RMSF_average = np.average(lig_RMSF_output, axis=1)
-
-        lig_RMSF_final_output = np.column_stack((atom_ids, lig_RMSF_output, lig_RMSF_average))
-        lig_RMSF_final_output = np.vstack((lig_RMSF_column_labels, lig_RMSF_final_output))
-        with open(args.outname + '_lig_RMSF.csv', 'w') as f:
-            writer = csv.writer(f, delimiter=',', lineterminator='\n')
-            writer.writerows(lig_RMSF_final_output)
-
-
-def get_parser():
-    script_desc = "This script will calculate the protein RMSD and RMSF, and ligand RMSF" \
-                  "for any number of trajectories. The script allows for optional protein and ligand asl (see below)"
-
-    parser = argparse.ArgumentParser(description=script_desc)
-
-    parser.add_argument('infiles',
-                        help= 'desmond trajectory directories to be used in RMSD and protein/ligand RMSF calculations',
-                        nargs='+')
-    parser.add_argument('-cms_file',
-                        help='path to the desmond -out.cms file',
-                        type=str,
-                        required=True)
-    parser.add_argument('-outname',
-                        help='name to use for the output files',
-                        type=str,
-                        required=True)
-    parser.add_argument('-protein_asl',
-                        help='The protein atomset in maestro atom selection language. default is all c-alpha atoms',
-                        default= 'protein and a. CA',
-                        type=str)
-    parser.add_argument('-ligand_asl',
-                        help="The ligand atomset in maestro atom selection language. "
-                             "By default, the script does not calculate a ligand RMSF",
-                        type=str,
-                        default='')
-    parser.add_argument('-s',
-                        help="Use every nth frame of the trajectory. Default is 1 (i.e., use every frame in the trj)"
-                             "Start:End:Step",
-                        type=str,
-                        required=False)
-    parser.add_argument('-RMSD',
-                        help="Do only the RMSD analysis",
-                        type=bool,
-                        default=False)
-    parser.add_argument('-RMSF',
-                        help="Do only the RMSF analysis",
-                        type=bool,
-                        default=False)
-    parser.add_argument('-lig_RMSF',
-                        help="Do only the ligand RMSF analysis",
-                        type=bool,
-                        default=False)
-    return parser
-
-
-def main(args):
-    # Call the read_cms_file function, pass to it the *-out.cms file (script input)
-    # Assign the 2 outputs the names msys_model and cms_model
-    msys_model, cms_model = read_cms_file(args.cms_file)
-
-    # read the input cms file as a structure element
-    st = structure.Structure.read(args.cms_file)
-
-    # Load the first trj so you can get the length of the trajectory
-    # don't need to load anything else because all input trjs should be the same length
-    tr = read_trajectory(args.infiles[0])
-
-    # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
-    # end on the last frame, and take steps of 1
-    if args.s:
-        # get the first frame, last frame, and the step the user wants to take
-        start, end, step = args.s.split(":")
-        if end == -1:
-            last_index = len(tr)
-            tr = tr[int(start):int(last_index)]
-        else:
-            tr = tr[int(start):int(end)]
-        tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
-
-    # initialize the output arrays based on what the user wants to calculate
-    # np.float16 is used to save memory
-    if args.RMSD:
-        RMSD_output = np.zeros((len(tr), len(args.infiles)), dtype=np.float16)
-
-    if args.RMSF:
-        # TODO output the residue info?
-        protein_RMSF_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)), dtype=np.float16)
-        RMSF_SEM_output = np.zeros((len(cms_model.select_atom(args.protein_asl)), len(args.infiles)))
-
-    # get the time (in ps) of the last frame which will be used later in the output csv
-    fr = tr[-1].time
-
-    # delete to manage memory - don't really need it anymore, will reload later
-    del tr
-
-    if args.lig_RMSF:
-        lig_aids = cms_model.select_atom(args.ligand_asl)
-        # initialize the output array for the ligand RMSF
-        lig_RMSF_output = np.zeros((len(lig_aids), len(args.infiles)))
-
-    # set the length of the trj to zero before we start to avoid issues later
-    traj_len = 0
-
-    # iterate over the input trajectories
-    for index, trajectory in enumerate(args.infiles):
-        # pass the trj to the read_trajectory function. returns a list of frames
-        tr = read_trajectory(trajectory)
-        traj_len = len(tr)
-
-        # if the user wants to splice the trj, this will do that. Otherwise, we will start at the first frame
-        # end on the last frame, and take steps of 1
-        if args.s:
-
-            # get the first frame, last frame, and the step the user wants to take
-            start, end, step = args.s.split(":")
-            if end == -1:
-                last_index = len(tr) - 1
-                tr = tr[start:last_index]
-            else:
-                tr = tr[int(start):int(end)]
-            tr = list(tr[i] for i in range(int(start), len(tr), int(step)))
-
-        logging.info("Done loading trajectory {}".format(index + 1))
-
-        if args.RMSD:
-            logging.info("Starting rep{} protein RMSD analysis".format(index + 1))
-
-            RMSD = calc_rmsd(args.protein_asl, cms_model, msys_model, tr, st)
-            # this will output the RMSD data to the output array in such a way that it writes down the column
-            RMSD_output[:, index] = RMSD
-
-            logging.info("Rep{} Protein RMSD Analysis Done".format(index + 1))
-
-        elif args.RMSF:
-            logging.info("Starting rep{} protein RMSF analysis".format(index + 1))
-
-            residues, RMSF, results_SF = calc_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
-            # output protein RMSF data to the output array
-            protein_RMSF_output[:, index] = RMSF
-
-            # Do block averaging
-            blocking_all = []
-            for i in results_SF[1].T:
-                blocking = reblock(i)
-                blocking_all.append(blocking)
-
-            optimal_block_num = []
-            for j in blocking_all:
-                optimal = find_optimal_block(ndata=traj_len, stats=j)
-                optimal_block_num.append(optimal)
-
-            optimal_block_num = [item for sublist in optimal_block_num for item in sublist]
-
-            # most common block number
-            most_common_number = max(set(optimal_block_num), key=optimal_block_num.count)
-
-            per_rep_SEM = []
-
-            # for every residue, in proteinSF divide that list into the optimal number of blocks
-            for resi in results_SF[1].T:
-                divided_list = np.array_split(np.asarray(resi), most_common_number)
-
-                # sem list
-                sem_list = []
-                for i in divided_list:
-                    sem_list.append(sem(i))
-
-                per_rep_SEM.append(sem(sem_list))
-
-            RMSF_SEM_output[:, index] = per_rep_SEM
-
-            logging.info("Rep{} Protein RMSF Analysis Done".format(index + 1))
-
-        elif args.lig_RMSF:
-            # TODO this whole function is untested!!!!!
-            logging.info("Starting rep{} ligand RMSF analysis".format(index + 1))
-
-            lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
-            lig_RMSF_output[:, index] = lig_rmsf_results
-            logging.info("Rep{} Ligand RMSF Analysis Done".format(index + 1))
-
-        else:
-            logging.info("Starting rep{} protein RMSD and RMSF analysis".format(index + 1))
-
-            # the default analysis is protein RMSD and RMSF
-            residues, RMSF, RMSD, results_SF = calc_rmsd_rmsf(args.protein_asl, cms_model, msys_model, tr, st)
-
-            logging.info("Rep{} Protein RMSD and RMSF Analysis Done".format(index + 1))
-
-            # Essentially this will output the RMSD data to the output array in such a way that it writes down the column
-            RMSD_output[:, index] = RMSD
-            # output protein RMSF data to the output array
-            protein_RMSF_output[:, index] = RMSF
-
-            # Do block averaging
-            blocking_all = []
-            for i in results_SF[1].T:
-                blocking = reblock(i)
-                blocking_all.append(blocking)
-
-            optimal_block_num = []
-            for j in blocking_all:
-                optimal = find_optimal_block(ndata=traj_len, stats=j)
-                optimal_block_num.append(optimal)
-
-            optimal_block_num = [item for sublist in optimal_block_num for item in sublist]
-
-            # most common block number
-            most_common_number = max(set(optimal_block_num), key=optimal_block_num.count)
-
-            per_rep_SEM = []
-
-            # for every residue, in proteinSF divide that list into the optimal number of blocks
-            for resi in results_SF[1].T:
-                divided_list = np.array_split(np.asarray(resi), most_common_number)
-
-                # sem list
-                sem_list = []
-                for i in divided_list:
-                    sem_list.append(sem(i))
-
-                per_rep_SEM.append(sem(sem_list))
-
-            RMSF_SEM_output[:,index] = per_rep_SEM
-
-            ###################################
-            # calculate ligand RMSF if needed #
-            ###################################
-
-            # If the user, inputs a ligand ASL, use that
-            if args.ligand_asl != '':
-                # Ligand RMSF analysis with provided ligand asl
-                lig_rmsf_aids, lig_rmsf_results = calc_lig_rmsf(args.ligand_asl, cms_model, msys_model, tr)
-                lig_RMSF_output[:, index] = lig_rmsf_results
-                print("Rep{} Ligand RMSF Analysis Done".format(index + 1))
-            else:
-                continue
-
-            del tr
-            # del residues, RMSF, RMSD, results_SF
-
-    ###########################
-    # Output data to CSV file #
-    ###########################
-    if args.RMSD:
-        RMSD_output = np.around(RMSD_output, decimals=3)
-        write_RMSD_csv(RMSD_output,traj_len,fr)
-
-    elif args.RMSF:
-        write_RMSF_csv(cms_model, protein_RMSF_output, residues, RMSF_SEM_output)
-
-    elif args.lig_RMSF:
-        write_ligRMSF_csv(lig_rmsf_aids, lig_RMSF_output)
-    else:
-        RMSD_output = np.around(RMSD_output, decimals=3)
-        write_csv(cms_model, RMSD_output, protein_RMSF_output, traj_len, residues, fr, RMSF_SEM_output, '', '')
+def main():
+    """
+    Main routine: orchestrates parsing, analysis, and output.
+    """
+    args = parse_args()         # Read command-line inputs
+    start_time = datetime.now() # Start timer
+
+    # Load models and structure for ASL
+    cms_path = Path(args.cms_file)
+    msys_model, cms_model, st = read_models(cms_path)
+
+    # Preload first trajectory for shape and timing
+    frames0 = read_traj(Path(args.infiles[0]))
+    frames0 = slice_frames(frames0, args.slice)
+    # Extract each frame’s time (in ps), then convert to nanoseconds
+    times_ps = np.array([f.time for f in frames0])       # in ps
+    times_ns = times_ps / 1000.0                          # convert to ns
+    traj_len = len(frames0)
+    total_time = frames0[-1].time  # Trajectory end time in ps
+
+    n_reps = len(args.infiles)    # Number of replicates
+
+    # Allocate arrays based on requested analyses
+    if args.do_rmsd or not any([args.do_rmsf, args.do_lig_rmsf]):
+        rmsd_results = np.zeros((traj_len, n_reps), dtype=np.float32)
+    if args.do_rmsf or not any([args.do_rmsd, args.do_lig_rmsf]):
+        residues, _, _ = calculate_rmsf(msys_model, cms_model, st, frames0, args.protein_asl)
+        n_res = len(residues)
+        rmsf_results = np.zeros((n_res, n_reps), dtype=np.float32)
+        rmsf_sem = np.zeros((n_res, n_reps), dtype=np.float32)
+    if args.do_lig_rmsf:
+        lig_atom_ids, _ = calculate_ligand_rmsf(msys_model, cms_model, frames0, args.ligand_asl)
+        n_lig = len(lig_atom_ids)
+        lig_results = np.zeros((n_lig, n_reps), dtype=np.float32)
+
+    # Loop over each trajectory replicate
+    for idx, trj_dir in enumerate(args.infiles, start=1):
+        frames = read_traj(Path(trj_dir))                # Load frames
+        frames = slice_frames(frames, args.slice)        # Apply slicing
+        logger.info(f"Processing replicate {idx}/{n_reps}")
+
+        # RMSD calculation
+        if args.do_rmsd or not any([args.do_rmsf, args.do_lig_rmsf]):
+            rmsd_results[:, idx-1] = calculate_rmsd(
+                msys_model, cms_model, st, frames, args.protein_asl)
+
+        # RMSF calculation with block-averaged SEM
+        if args.do_rmsf or not any([args.do_rmsd, args.do_lig_rmsf]):
+            _, rmsf_vals, raw_fluct = calculate_rmsf(
+                msys_model, cms_model, st, frames, args.protein_asl)
+            for ridx, vals in enumerate(raw_fluct.T):
+                # stats = reblock(np.asarray(vals))
+                # blk = find_optimal_block(len(vals), stats)
+                # chunks = np.array_split(vals, blk)
+                # rmsf_sem[ridx, idx-1] = sem([sem(chunk) for chunk in chunks])
+                stats = reblock(np.asarray(vals))
+                blk_list = find_optimal_block(len(vals), stats)
+
+                # blk_list should be a Python list of length 1 (since data is 1D)
+                blk_idx = blk_list[0]
+
+                # If blk_idx is not a finite positive integer, fall back to single‐block sem
+                if not np.isfinite(blk_idx) or int(blk_idx) < 1:
+                    # no valid blocking, just SEM over the raw fluctuations
+                    rmsf_sem[ridx, idx - 1] = sem(vals)
+                else:
+                    n_chunks = int(blk_idx)
+                    # Split vals into n_chunks “blocks”.  Any chunk of length <2 will produce nan sem,
+                    # so we filter those out in the inner list comprehension.
+                    chunks = np.array_split(vals, n_chunks)
+
+                    # Compute SEM of each sub‐chunk, then take SEM across those chunk‐wise SEMs
+                    inner_sems = [sem(chunk) for chunk in chunks if len(chunk) > 1]
+                    if len(inner_sems) > 1:
+                        rmsf_sem[ridx, idx - 1] = sem(inner_sems)
+                    elif len(inner_sems) == 1:
+                        # If only one block had ≥2 points, just use its SEM
+                        rmsf_sem[ridx, idx - 1] = inner_sems[0]
+                    else:
+                        # If every chunk was size 1, fall back to sem over entire data
+                        rmsf_sem[ridx, idx - 1] = sem(vals)
+            rmsf_results[:, idx-1] = rmsf_vals
+
+        # Ligand RMSF calculation
+        if args.do_lig_rmsf:
+            atom_ids, lig_vals = calculate_ligand_rmsf(
+                msys_model, cms_model, frames, args.ligand_asl)
+            lig_results[:, idx-1] = lig_vals
+
+    # Write out final CSV files
+    base = args.outname
+    if args.do_rmsd or not any([args.do_rmsf, args.do_lig_rmsf]):
+        avg_rmsd = np.mean(rmsd_results, axis=1)  # shape = (traj_len,)
+        # Stack columns: first times_ns, then all replicate columns, then avg_rmsd
+        combined = np.column_stack((times_ns, rmsd_results, avg_rmsd))
+        # Header list:
+        headers = ['Time_ns'] + [f"Rep{j}" for j in range(1, n_reps+1)] + ['Average']
+        # Write out CSV manually
+        out_path = Path(f"{base}_rmsd.csv")
+        with out_path.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(headers)
+            for row in combined:
+                writer.writerow(row.tolist())
+        print(f"Wrote RMSD vs. time CSV: {out_path}")
+
+    if args.do_rmsf or not any([args.do_rmsd, args.do_lig_rmsf]):
+        # 1) Compute per-residue averages across replicates
+        # rmsf_results.shape = (n_res, n_reps)
+        avg_rmsf = np.mean(rmsf_results, axis=1)  # shape = (n_res,)
+
+        # rmsf_sem.shape = (n_res, n_reps)
+        avg_sem = np.mean(rmsf_sem, axis=1)  # shape = (n_res,)
+
+        # 2) Stack on the “Average” column
+        # For RMSF: each row will be [rmsf_rep1, rmsf_rep2, …, rmsf_repN, avg_rmsf]
+        combined_rmsf = np.column_stack((rmsf_results, avg_rmsf))  # shape = (n_res, n_reps+1)
+
+        # For SEM: each row will be [sem_rep1, sem_rep2, …, sem_repN, avg_sem]
+        combined_sem = np.column_stack((rmsf_sem, avg_sem))  # shape = (n_res, n_reps+1)
+
+        # 3) Build headers with “Average” as last column
+        base_headers = [f"Rep{j}" for j in range(1, n_reps + 1)]
+        rmsf_headers = ['Residue'] + base_headers + ['Average']
+        sem_headers = ['Residue'] + base_headers + ['Average']
+
+        # 4) Write out the RMSF CSV (per-residue values plus average)
+        out_rmsf = Path(f"{base}_RMSF.csv")
+        with out_rmsf.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(rmsf_headers)
+            for ridx, res_label in enumerate(residues):
+                # row_data = [rep1, rep2, …, repN, avg_rmsf]
+                row_data = combined_rmsf[ridx].tolist()
+                writer.writerow([res_label, *row_data])
+        print(f"Wrote RMSF CSV with average column: {out_rmsf}")
+
+        # 5) Write out the RMSF_SEM CSV (per-residue SEM plus average SEM)
+        out_sem = Path(f"{base}_RMSF_SEM.csv")
+        with out_sem.open('w', newline='') as fout:
+            writer = csv.writer(fout)
+            writer.writerow(sem_headers)
+            for ridx, res_label in enumerate(residues):
+                row_data = combined_sem[ridx].tolist()
+                writer.writerow([res_label, *row_data])
+        print(f"Wrote RMSF_SEM CSV with average column: {out_sem}")
+
+    if args.do_lig_rmsf:
+        write_csv(f"{base}_LigRMSF", lig_atom_ids, lig_results,
+                  ['Atom', *[f"Rep{j}" for j in range(1, n_reps+1)]])
+
+    # Log total runtime
+    duration = datetime.now() - start_time
+    print(f"Total runtime: {duration}")
 
 
 if __name__ == '__main__':
-    parser = get_parser()
-    try:
-        args = parser.parse_args()
-    except IOError as msg:
-        parser.error(str(msg))
-    main(args)
-    print(datetime.now() - startTime)
+    main()
