@@ -4,26 +4,53 @@ from datetime import datetime
 import os
 from collections import Counter
 import itertools
+import argparse  # For parsing command-line options
 
-startTime = datetime.now()
 
-# directory where cms files and trajectories are kept
-base_dir = "/media/labconn/Seagate/Mina/Structural_and_Evolutionary_Basis_of_Multiprotein_Recognition_by_Outer_Membrane_Protein_OprM/Production/analysis/no_water/"
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments and return namespace.
+    """
+    parser = argparse.ArgumentParser(
+        description="Calculate RMSD/RMSF for Desmond trajectories"
+    )
+    # Input trajectory directories (one or more)
+    parser.add_argument('infiles', nargs='+',
+                        help='Desmond trajectory directories')
+    # Required path to CMS model
+    parser.add_argument('-cms', dest='cms_file', required=True,
+                        help='Path to the Desmond -out.cms file')
+    # Output base name for CSV files
+    parser.add_argument('-o', dest='outname', required=True,
+                        help='Base name for output CSV files')
+    # Optional ASL for protein selection
+    parser.add_argument('-asl', '--asl', dest='protein_asl',
+                        default='protein', help='Protein atom selection (Maestro ASL)')
+    # Optional ASL for ligand selection
+    parser.add_argument('-c', '--cutoff', dest='ligand_asl',
+                        default=0.3, type=float, help='')
+    return parser.parse_args()
 
-# list of trajectory files
-infile = "MexE-OprM_rep1_nowater_trj/"
 
-cms_file = "MexE-OprM_rep1_nowater-out.cms"
+def read_traj(trj_path):
+    """
+    Read trajectory frames from a Desmond directory.
+    """
+    # Convert generator to list for multiple passes
+    return list(traj.read_traj(str(trj_path)))
 
-# Load the trajectory
-trj_out = traj.read_traj(os.path.join(base_dir, infile))
 
-# read the msys_model and cms_model from the cms_file provided
-msys_model, cms_model = topo.read_cms(os.path.join(base_dir, cms_file))
+def read_models(cms_path):
+    msys_model, cms_model = topo.read_cms(cms_path)
+    return msys_model, cms_model
 
-Hbonds = analysis.ProtProtHbondInter(msys_model,cms_model,asl='protein')
 
-results = analysis.analyze(trj_out, Hbonds)
+def hbond(msys_model, cms_model, asl):
+    Hbonds = analysis.ProtProtHbondInter(msys_model, cms_model, asl=asl)
+    results = analysis.analyze(trj_out, Hbonds)
+
+    return results
+
 
 def get_atom_ids_solo(cms_model, pairs):
     # to get the info of the pairs
@@ -42,8 +69,24 @@ def get_atom_ids_solo(cms_model, pairs):
     atom_name2 = a2.pdbname.strip()
     x = '{}_{}_{}_{} - {}_{}_{}_{}'.format(chain1, resnum1, resname1, atom_name1,
                                                        chain2, resnum2, resname2, atom_name2)
-
     return x
+
+
+def main():
+    args = parse_args()
+
+    # read the msys_model and cms_model from the cms_file provided
+    msys_model, cms_model = topo.read_cms(args.cms_file)
+
+    for idx, trj_dir in enumerate(args.infiles, start=1):
+        # Load the trajectory
+        trj_out = traj.read_traj(trj_dir)
+
+
+
+
+
+
 
 
 hbond_bb = []
@@ -119,20 +162,5 @@ with open('test_bs_hbond.csv', mode='w', newline='') as file:
     writer = csv.writer(file)
     writer.writerows(hbond_bs_filtered)
 
-# for item, count in hbond_sb_counter.items():
-#     if (count / 20.) * 100. > 50.:
-#         # split it up
-#         info = get_atom_ids_solo(cms_model, item)
-#         first, second = info.split(" - ")
-#         chain_1, resi_1, resnam_1, atomname_1 = first.split("_")
-#         chain_2, resi_2, resnam_2, atomname_2 = second.split("_")
-#
-#         cmd.select(name='ca1', selection='c. {} and name {} and resi {}'.format(chain_1, atomname_1, resi_1))
-#         cmd.select(name='ca2', selection='c. {} and name {} and resi {}'.format(chain_2, atomname_2, resi_2))
-#
-#         cmd.distance(name="hbonds", selection1='ca1', selection2='ca2')
-
-#         cmd.color("blue", "hbonds")
-#
-# cmd.hide("labels", "all")
-# cmd.set("dash_gap", "0")
+if __name__ == '__main__':
+    main()
