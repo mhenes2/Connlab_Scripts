@@ -133,15 +133,15 @@ def main():
         new_trajs = []
         trajs = []
         for i in range(1, len(args.infiles)+1):
-            new_trajs.append('{}_stripped_rep{}_trj'.format(args.name, i))
+            new_trajs.append('{}_stripped_rep{}_trj/'.format(args.name, i))
         for f in new_trajs:
             tr = traj.read_traj(f)
             trajs.append(tr)
         trajs = [item for sublist in trajs for item in sublist]
         print('The resultant trajectory has {} frames.'.format(len(trajs)))
-        traj.write_traj(trajs, fname='{}_stripped_concat_trj'.format(args.name))
+        traj.write_traj(trajs, fname='{}_stripped_concat_trj/'.format(args.name))
         out_cms_fname = args.name + '_concat-out.cms'
-        cms_model.fix_filenames(out_cms_fname, '{}_stripped_concat_trj'.format(args.name))
+        cms_model.fix_filenames(out_cms_fname, '{}_stripped_concat_trj/'.format(args.name))
         cms_model.write(out_cms_fname)
 
     # flatten a list of lists

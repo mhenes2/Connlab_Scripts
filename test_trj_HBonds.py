@@ -55,8 +55,6 @@ def hbond(msys_model, cms_model, asl):
 def get_atom_ids_solo(cms_model, pairs):
     # to get the info of the pairs
     atoms = [a for a in cms_model.atom]
-    # atom_ids = []
-
     a1 = atoms[pairs[0]]
     a2 = atoms[pairs[1]]
     chain1 = a1.chain.strip()
@@ -81,7 +79,6 @@ def main():
     for idx, trj_dir in enumerate(args.infiles, start=1):
         # Load the trajectory
         trj_out = traj.read_traj(trj_dir)
-
 
 
 
