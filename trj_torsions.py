@@ -1,13 +1,7 @@
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Dict
-from schrodinger.structutils.analyze import evaluate_asl
 from schrodinger.application.desmond.packages import topo, traj, analysis
-from schrodinger import structure
 
-from schrodinger.application.desmond.packages.analysis import analyze
-from schrodinger.application.desmond.packages.analysis import Torsion
 
 from datetime import datetime
 import argparse
