@@ -1,8 +1,6 @@
 import pandas as pd
 import numpy as np
 from schrodinger.application.desmond.packages import topo, traj, analysis
-
-
 from datetime import datetime
 import argparse
 
