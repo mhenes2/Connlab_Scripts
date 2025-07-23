@@ -54,7 +54,7 @@ def protein_protein_interactions(msys_model, cms_model, trj, protein_asl):
     protein_protein_interactions = analysis.ProtProtInter(msys_model, cms_model, asl=str(protein_asl))
     protein_protein_interactions_results = analysis.analyze(trj, protein_protein_interactions)
 
-    # returns a dictionary with the following keys
+    # returns a dictionary of dictionaries with the following keys
     # dict_keys(['pi-cat', 'pi-pi', 'salt-bridge', 'hbond_bb', 'hbond_ss', 'hbond_sb', 'hbond_bs'])
 
     return protein_protein_interactions_results
