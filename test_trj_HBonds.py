@@ -5,6 +5,7 @@ import os
 from collections import Counter
 from itertools import chain
 import argparse  # For parsing command-line options
+import pandas as pd
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +78,40 @@ def get_atom_ids_solo(cms_model, pairs):
     return x
 
 
+def dicts_to_csv_pandas(dict_of_dicts, interaction=None, outname=None, trj_length=None):
+    """
+    For each key in dict_of_dicts, writes a CSV named
+    "{outname}_{interaction}_{main_key}.csv" with columns:
+      - pairs: formatted "A - B"
+      - frequency: value as a percentage of trj_length
+
+    Parameters:
+    - dict_of_dicts: dict of dicts with tuple keys and count values
+    - interaction:  string to include in filename
+    - outname:      base name for output files
+    - trj_length:   total frames/timepoints for calculating percentages
+    """
+    if trj_length is None or trj_length == 0:
+        raise ValueError("trj_length must be provided and non-zero")
+
+    for main_key, inner_dict in dict_of_dicts.items():
+        # Build DataFrame
+        df = pd.DataFrame(
+            inner_dict.items(),
+            columns=['pairs', 'frequency']
+        )
+
+        # Format the 'pairs' column
+        df['pairs'] = df['pairs'].apply(lambda tup: f"{tup[0]} - {tup[1]}")
+
+        # Convert counts to percentage of trj_length
+        df['frequency'] = df['frequency'] / trj_length * 100
+
+        # Write out CSV (with two decimal places)
+        filename = f"{outname}_{interaction}_{main_key}.csv"
+        df.to_csv(filename, index=False, float_format="%.2f")
+
+
 def main():
     args = parse_args()
 
@@ -91,85 +126,13 @@ def main():
     flat_frames = list(chain.from_iterable(frames))
 
     protein_protein_interactions_df = protein_protein_interactions(msys_model, cms_model, flat_frames, args.protein_asl)
+    dicts_to_csv_pandas(protein_protein_interactions_df, "protein-protein", args.outname, len(flat_frames))
 
     protein_ligand_interactions_df = protein_protein_interactions(msys_model, cms_model, flat_frames, args.combined_asl)
+    dicts_to_csv_pandas(protein_ligand_interactions_df, "protein-ligand", args.outname, len(flat_frames))
 
     ligand_ligand_interactions_df = protein_protein_interactions(msys_model, cms_model, flat_frames, args.ligand_asl)
-
-
-
-# hbond_bb = []
-# hbond_ss = []
-# hbond_sb = []
-# hbond_bs = []
-#
-# for frame in range(len(results)):
-#     for key in results[frame]:
-#         globals()[key].append(results[frame][key])
-#
-#
-# hbond_bb = list(itertools.chain(*hbond_bb))
-# hbond_ss = list(itertools.chain(*hbond_ss))
-# hbond_sb = list(itertools.chain(*hbond_sb))
-# hbond_bs = list(itertools.chain(*hbond_bs))
-#
-# hbond_bb_gid = [(x + 1, y + 1) for (x, y) in hbond_bb]
-# hbond_ss_gid = [(x + 1, y + 1) for (x, y) in hbond_ss]
-# hbond_sb_gid = [(x + 1, y + 1) for (x, y) in hbond_sb]
-# hbond_bs_gid = [(x + 1, y + 1) for (x, y) in hbond_bs]
-#
-# hbond_bb_counter = Counter(hbond_bb_gid)
-# hbond_ss_counter = Counter(hbond_ss_gid)
-# hbond_sb_counter = Counter(hbond_sb_gid)
-# hbond_bs_counter = Counter(hbond_bs_gid)
-#
-# hbond_bb_filtered = []
-# hbond_ss_filtered = []
-# hbond_sb_filtered = []
-# hbond_bs_filtered = []
-#
-# for item, count in hbond_bb_counter.items():
-#     if (count / float(len(trj_out))) * 100. > 50.:
-#         # split it up
-#         info = get_atom_ids_solo(cms_model,item)
-#         hbond_bb_filtered.append([info, float(count)])
-#
-# with open('test_bb_hbond.csv', mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerows(hbond_bb_filtered)
-#
-#
-# for item, count in hbond_ss_counter.items():
-#     if (count / float(len(trj_out))) * 100. > 50.:
-#         # split it up
-#         info = get_atom_ids_solo(cms_model,item)
-#         hbond_ss_filtered.append([info, float(count)])
-#
-# with open('test_ss_hbond.csv', mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerows(hbond_ss_filtered)
-#
-#
-# for item, count in hbond_sb_counter.items():
-#     if (count / float(len(trj_out))) * 100. > 50.:
-#         # split it up
-#         info = get_atom_ids_solo(cms_model,item)
-#         hbond_sb_filtered.append([info, float(count)])
-#
-# with open('test_sb_hbond.csv', mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerows(hbond_sb_filtered)
-#
-#
-# for item, count in hbond_bs_counter.items():
-#     if (count / float(len(trj_out))) * 100. > 50.:
-#         # split it up
-#         info = get_atom_ids_solo(cms_model,item)
-#         hbond_bs_filtered.append([info, float(count)])
-#
-# with open('test_bs_hbond.csv', mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerows(hbond_bs_filtered)
+    dicts_to_csv_pandas(ligand_ligand_interactions_df, "ligand-ligand", args.outname, len(flat_frames))
 
 if __name__ == '__main__':
     main()
